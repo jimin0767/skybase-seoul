@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Build a competition-ready interactive HTML dashboard for
-성남시 드론·로봇 배송 거점 최적화 의사결정 지원 시스템
+서울시 드론·로봇 배송 거점 최적화 의사결정 지원 시스템
 
 Dynamic hub recomputation: layer toggles re-run greedy set-cover in the browser.
 Pre-computation here: coverage matrix (172 facilities × 1947 cells within 500m).
@@ -11,9 +11,14 @@ import csv
 import json
 import math
 import os
+from pathlib import Path
 
-DATA_DIR = r"E:\서울시데이터경진대회\Aero-Logic-Seoul/03_visualization/tableau_data"
-OUT_HTML = r"E:\서울시데이터경진대회\Aero-Logic-Seoul/03_visualization/dashboard.html"
+_SCRIPT_DIR = Path(__file__).resolve().parent
+DATA_DIR = str(_SCRIPT_DIR / "tableau_data")
+OUT_HTML = str(_SCRIPT_DIR / "dashboard.html")
+PROJECT_ROOT = _SCRIPT_DIR.parent
+STORE_GPKG = PROJECT_ROOT / "processed" / "store_h3_industry_counts_large.gpkg"
+POP_GPKG = PROJECT_ROOT / "processed" / "population_h3_density.gpkg"
 
 SERVICE_RADIUS_M = 500  # metres — coverage radius per hub
 
@@ -71,12 +76,49 @@ counts = {k: len(v) for k, v in poi_js.items()}
 print(f"POI layers loaded: {counts}")
 
 
+# ── Load store industry counts (음식 only) ───────────────────────────────
+store_lookup = {}
+if STORE_GPKG.exists():
+    import geopandas as _gpd
+    _store_gdf = _gpd.read_file(STORE_GPKG, layer="store_industry_large_wide")
+    for _, row in _store_gdf.iterrows():
+        h3_id = row["h3_index"]
+        val = int(row["count_음식"]) if ("count_음식" in row.index and row["count_음식"] == row["count_음식"]) else 0
+        store_lookup[h3_id] = val
+    del _store_gdf, _gpd
+    print(f"Store data loaded: {len(store_lookup)} H3 cells (음식 only)")
+else:
+    print(f"⚠ Store GeoPackage not found: {STORE_GPKG}")
+
+# ── Load population H3 density (exploratory) ────────────────────────────
+POP_FIELDS = [
+    "estimated_h3_pop", "estimated_h3_daytime_pop",
+    "estimated_h3_evening_pop", "estimated_h3_night_pop",
+    "pop_density_index", "daytime_pop_index",
+    "evening_pop_index", "night_pop_index", "peak_hour",
+]
+pop_lookup = {}
+if POP_GPKG.exists():
+    import geopandas as _gpd2
+    _pop_gdf = _gpd2.read_file(POP_GPKG, layer="population_h3_density")
+    for _, row in _pop_gdf.iterrows():
+        h3_id = row["h3_index"]
+        entry = {}
+        for col in POP_FIELDS:
+            v = row.get(col, 0)
+            entry[col] = 0 if (v != v) else v  # NaN check
+        pop_lookup[h3_id] = entry
+    del _pop_gdf, _gpd2
+    print(f"Population data loaded: {len(pop_lookup)} H3 cells")
+else:
+    print(f"⚠ Population GeoPackage not found: {POP_GPKG}")
+
 # ── Grid: full data + raw urgency float ───────────────────────────────────
-# urgency float: re-derive from the 5 scores (it's in grid_scores.csv)
 grid_js = []
 for r in grid_scores:
-    grid_js.append({
-        "h3":   r["h3_index"],
+    h3_id = r["h3_index"]
+    entry = {
+        "h3":   h3_id,
         "lat":  float(r["lat"]),
         "lon":  float(r["lon"]),
         "dong": r["ADM_NM"],
@@ -90,10 +132,22 @@ for r in grid_scores:
         "ddi":  round(float(r["delivery_demand_index"]), 3),
         "fpi":  round(float(r["flow_pop_index"]),  3),
         "urg":  r["urgency_level"],
-        # raw urgency float for greedy scoring
         "urgv": round(float(r["urgency"]), 4),
         "cl":   r["composite_level"],
-    })
+        "c_food": store_lookup.get(h3_id, 0),
+    }
+    # Population fields (exploratory — does not affect scoring)
+    pop = pop_lookup.get(h3_id, {})
+    entry["pop"]       = round(float(pop.get("estimated_h3_pop", 0)), 1)
+    entry["pop_day"]   = round(float(pop.get("estimated_h3_daytime_pop", 0)), 1)
+    entry["pop_eve"]   = round(float(pop.get("estimated_h3_evening_pop", 0)), 1)
+    entry["pop_night"] = round(float(pop.get("estimated_h3_night_pop", 0)), 1)
+    entry["pop_idx"]       = round(float(pop.get("pop_density_index", 0)), 4)
+    entry["pop_day_idx"]   = round(float(pop.get("daytime_pop_index", 0)), 4)
+    entry["pop_eve_idx"]   = round(float(pop.get("evening_pop_index", 0)), 4)
+    entry["pop_night_idx"] = round(float(pop.get("night_pop_index", 0)), 4)
+    entry["peak_hour"]     = int(pop.get("peak_hour", 0))
+    grid_js.append(entry)
 
 # urgency threshold for hotspot: 28th-percentile of all urgency values
 # (mirrors NB10 which uses 0.285 quantile)
@@ -227,6 +281,38 @@ kpi_js = {
     "coverage_rate": hubs_js[-1]["coverage_pct"] if hubs_js else 0,
     "avg_composite": round(avg_composite, 3),
 }
+
+# ── Update grid_scores.csv with store + population columns ───────────────
+enriched_path = os.path.join(DATA_DIR, "grid_scores.csv")
+with open(enriched_path, encoding="utf-8-sig") as _f:
+    _reader = csv.DictReader(_f)
+    _fieldnames = list(_reader.fieldnames)
+
+# Remove stale store/ratio columns from previous runs
+_stale = {c for c in _fieldnames
+          if (c.startswith("count_") and c != "count_음식")
+          or c in ("total_stores", "음식_ratio", "소매_ratio", "과학기술_ratio")}
+_fieldnames = [c for c in _fieldnames if c not in _stale]
+
+# Ensure current enrichment columns are present
+_enrich_cols = ["count_음식"] + list(POP_FIELDS)
+for col in _enrich_cols:
+    if col not in _fieldnames:
+        _fieldnames.append(col)
+
+with open(enriched_path, "w", encoding="utf-8-sig", newline="") as _f:
+    _writer = csv.DictWriter(_f, fieldnames=_fieldnames, extrasaction="ignore")
+    _writer.writeheader()
+    for r in grid_scores:
+        h3_id = r["h3_index"]
+        row = dict(r)
+        row["count_음식"] = store_lookup.get(h3_id, 0)
+        pop = pop_lookup.get(h3_id, {})
+        for col in POP_FIELDS:
+            v = pop.get(col, 0)
+            row[col] = round(float(v), 4) if isinstance(v, float) else int(v)
+        _writer.writerow(row)
+print(f"Enriched grid_scores.csv with count_음식 + {len(POP_FIELDS)} population columns")
 
 # ── Serialise to JS ───────────────────────────────────────────────────────
 GRID_JSON     = json.dumps(grid_js,      ensure_ascii=False)
@@ -367,13 +453,15 @@ body {{ font-family:'Noto Sans KR',sans-serif; background:#0f0f1a; color:#e0e0e0
 .updating {{ display:none; }}
 .updating.show {{ display:inline-block; animation:spin .6s linear infinite; }}
 @keyframes spin {{ to{{transform:rotate(360deg)}} }}
+select:focus {{ outline:none; border-color:#4fc3f7; }}
+select option {{ background:#0f1928; color:#e0e0e0; }}
 </style>
 </head>
 <body>
 
 <div class="hero">
-  <h1>🚁 성남시 드론·로봇 융합 배송 거점 최적 입지 분석</h1>
-  <div class="subtitle">Multi-Layered Decision Support System · 2026 성남시 공공데이터 활용 시각화 경진대회</div>
+  <h1>🚁 서울시 드론·로봇 융합 배송 거점 최적 입지 분석</h1>
+  <div class="subtitle">Multi-Layered Decision Support System · 2026 서울시 공공데이터 활용 시각화 경진대회</div>
   <span class="badge">레이어 조합 → 실시간 거점 재최적화</span>
 </div>
 
@@ -442,6 +530,19 @@ body {{ font-family:'Noto Sans KR',sans-serif; background:#0f0f1a; color:#e0e0e0
         <div class="formula-box">
           <b>현재 스코어 :</b> <span id="formula-display">공역 × 장애물 × 소음 × 지형 × 기상</span>
           <span id="update-spin" class="updating">🔄</span>
+        </div>
+        <div style="margin-top:10px;">
+          <label style="font-size:11px;color:#8899aa;">🗺️ 맵 색상 모드</label>
+          <select id="color-mode-select" style="width:100%;margin-top:4px;padding:7px 10px;
+            background:#0f1928;color:#e0e0e0;border:1px solid #1a3a5c;border-radius:6px;
+            font-family:'Noto Sans KR';font-size:12px;cursor:pointer;">
+            <option value="score">종합 적합도</option>
+            <option value="food">음식 상권 밀도</option>
+            <option value="pop">🏘️ 생활인구 밀도</option>
+            <option value="pop_day">☀️ 주간 생활인구</option>
+            <option value="pop_eve">🌆 저녁 생활인구</option>
+            <option value="pop_night">🌙 야간 생활인구</option>
+          </select>
         </div>
       </div>
 
@@ -529,7 +630,7 @@ body {{ font-family:'Noto Sans KR',sans-serif; background:#0f0f1a; color:#e0e0e0
 
   <div class="status-bar">
     ⬛ H3 res.9 · 500m 서비스 반경 · 그리디 셋 커버 알고리즘 · 실시간 레이어 재최적화
-    &nbsp;|&nbsp; 데이터: 성남시 공공데이터포털 · NGII · 배달의민족 2023
+    &nbsp;|&nbsp; 데이터: 서울시 공공데이터포털 · NGII · 배달의민족 2023
   </div>
 </div>
 
@@ -554,6 +655,8 @@ const POI      = {POI_JSON};           // POI layers: park/commercial/medical/su
 // ═══════════════════════════════════════════════════════════════
 // Utilities
 // ═══════════════════════════════════════════════════════════════
+let colorMode = 'score';
+
 function scoreToColor(v) {{
   if (v <= 0)   return '#e94560';
   if (v < 0.2)  return '#ff5722';
@@ -563,6 +666,35 @@ function scoreToColor(v) {{
   if (v < 0.9)  return '#4caf50';
   return '#00c853';
 }}
+
+function densityToColor(count, maxVal) {{
+  if (count <= 0) return '#1a1a2e';
+  const t = Math.min(count / (maxVal * 0.5), 1);
+  const r = Math.round(10 + t * 50);
+  const g = Math.round(30 + t * 100);
+  const b = Math.round(80 + t * 175);
+  return `rgb(${{r}},${{g}},${{b}})`;
+}}
+
+// Population index color ramp (warm orange-red, 0-1 normalized input)
+function popToColor(idx) {{
+  if (idx <= 0) return '#1a1a2e';
+  // Warm sequential: dark → orange → bright yellow-white
+  const t = Math.min(idx, 1);
+  const r = Math.round(40 + t * 215);
+  const g = Math.round(15 + t * 140);
+  const b = Math.round(15 + t * 30);
+  return `rgb(${{r}},${{g}},${{b}})`;
+}}
+
+const COLOR_MODES = {{
+  score:     {{ label: '종합 적합도',   field: null }},
+  food:      {{ label: '음식 상권 밀도', field: 'c_food', max: Math.max(...GRID.map(c => c.c_food || 0)) || 1 }},
+  pop:       {{ label: '생활인구 밀도', field: 'pop_idx',       pop: true }},
+  pop_day:   {{ label: '주간 생활인구', field: 'pop_day_idx',   pop: true }},
+  pop_eve:   {{ label: '저녁 생활인구', field: 'pop_eve_idx',   pop: true }},
+  pop_night: {{ label: '야간 생활인구', field: 'pop_night_idx', pop: true }},
+}};
 
 function recalcScore(cell, active) {{
   let v = 1.0, n = 0;
@@ -647,7 +779,7 @@ function selectHubs(scores, maxHubs=10, coverageTarget=0.9) {{
 // ═══════════════════════════════════════════════════════════════
 // Map setup
 // ═══════════════════════════════════════════════════════════════
-const map = L.map('map', {{ preferCanvas: true }}).setView([37.39, 127.11], 12.5);
+const map = L.map('map', {{ preferCanvas: true }}).setView([37.5665, 126.9780], 11);
 L.tileLayer('https://{{s}}.basemaps.cartocdn.com/dark_all/{{z}}/{{x}}/{{y}}{{r}}.png', {{
   maxZoom: 19, subdomains: 'abcd'
 }}).addTo(map);
@@ -706,6 +838,14 @@ document.querySelectorAll('.poi-toggle').forEach(label => {{
 
 // ── Hex cell layer ────────────────────────────────────────────
 let hexMarkers = [];
+function getHexColor(cell, score) {{
+  if (colorMode === 'score') return scoreToColor(score);
+  const mode = COLOR_MODES[colorMode];
+  if (!mode || !mode.field) return scoreToColor(score);
+  if (mode.pop) return popToColor(cell[mode.field] || 0);
+  return densityToColor(cell[mode.field] || 0, mode.max);
+}}
+
 function buildHexLayer(scores) {{
   hexMarkers.forEach(m => map.removeLayer(m));
   hexMarkers = [];
@@ -713,17 +853,29 @@ function buildHexLayer(scores) {{
   scores.forEach((sc, i) => {{
     const cell = GRID[i];
     total += sc; n++;
+    const fillC = getHexColor(cell, sc);
     const m = L.circleMarker([cell.lat, cell.lon], {{
-      radius: 5, fillColor: scoreToColor(sc), fillOpacity: 0.7,
-      color: scoreToColor(sc), weight: 0.5, opacity: 0.9
+      radius: 5, fillColor: fillC, fillOpacity: 0.7,
+      color: fillC, weight: 0.5, opacity: 0.9
     }});
+    const storeSection = cell.c_food != null
+      ? `<hr style="border-color:#334;margin:4px 0">` +
+        `<span style="color:#4fc3f7">음식 상권</span>: ${{cell.c_food}}개`
+      : '';
+    const popSection = cell.pop != null
+      ? `<hr style="border-color:#334;margin:4px 0">` +
+        `<span style="color:#ff9800">추정 생활인구</span>: ${{Math.round(cell.pop)}}명<br>` +
+        `주간: ${{Math.round(cell.pop_day)}} | 저녁: ${{Math.round(cell.pop_eve)}} | 야간: ${{Math.round(cell.pop_night)}}<br>` +
+        `피크 시간: ${{cell.peak_hour}}시`
+      : '';
     m.bindPopup(
       `<div style="font-family:'Noto Sans KR',sans-serif;font-size:12px;">` +
       `<b>${{cell.dong}}</b> (${{cell.gu}})<br>` +
       `종합: <b style="color:${{scoreToColor(sc)}}">${{sc.toFixed(3)}}</b><br>` +
       `공역: ${{cell.sa}} | 장애물: ${{cell.so}}<br>` +
       `소음: ${{cell.sn}} | 지형: ${{cell.st}} | 기상: ${{cell.sw}}<br>` +
-      `긴급도: ${{cell.urg}} | 수요지수: ${{cell.ddi}}</div>`
+      `긴급도: ${{cell.urg}} | 수요지수: ${{cell.ddi}}` +
+      `${{storeSection}}${{popSection}}</div>`
     );
     m.addTo(map);
     hexMarkers.push(m);
@@ -895,6 +1047,12 @@ document.querySelectorAll('.layer-toggle').forEach(label => {{
     setTimeout(() => {{ updateDashboard(); spin.classList.remove('show'); }}, 30);
     e.preventDefault();
   }});
+}});
+
+// Color mode selector
+document.getElementById('color-mode-select').addEventListener('change', function() {{
+  colorMode = this.value;
+  updateDashboard();
 }});
 
 // Initial render
