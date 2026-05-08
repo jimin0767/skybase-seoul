@@ -986,8 +986,10 @@ map.on('load', () => {
     })
     .catch(err => console.warn('Buildings load failed (need http server):', err));
 
-  // ── Terrain hillshade (mountains visualized, no setTerrain so buildings stay crisp) ──
-  // raster-dem + hillshade layer gives mountain shading without deforming fill-extrusion geometry.
+  // ── Terrain (3D mountains + hillshade) ───────────────────────
+  // exaggeration: 1.0 = real-world scale; keeps flat-area building bases stable.
+  // Buildings on hillsides may show slight base warp — acceptable since Seoul's
+  // dense urban grid sits on flat ground; mountain slopes have no buildings.
   map.addSource('terrain-dem', {
     type: 'raster-dem',
     tiles: ['https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png'],
@@ -996,10 +998,11 @@ map.on('load', () => {
     maxzoom: 15,
     attribution: 'Terrain &copy; <a href="https://registry.opendata.aws/terrain-tiles/">Mapzen/AWS</a>',
   });
+  map.setTerrain({ source: 'terrain-dem', exaggeration: 1.0 });
   map.addLayer({
     id: 'hillshade', type: 'hillshade', source: 'terrain-dem',
     paint: {
-      'hillshade-exaggeration': 0.6,
+      'hillshade-exaggeration': 0.5,
       'hillshade-shadow-color': '#0a0a1a',
       'hillshade-highlight-color': '#1e3a5f',
       'hillshade-accent-color': '#0f2a4a',
