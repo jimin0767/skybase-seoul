@@ -337,8 +337,8 @@ html = f"""<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>서울시 드론·로봇 배송 거점 최적화</title>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.css"/>
+<script src="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.js"></script>
 <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <style>
@@ -377,8 +377,9 @@ body {{ font-family:'Noto Sans KR',sans-serif; background:#0f0f1a; color:#e0e0e0
 .main-grid {{ display:grid; grid-template-columns:1fr 420px; gap:16px; margin-bottom:16px; }}
 @media(max-width:1100px) {{ .main-grid {{ grid-template-columns:1fr; }} .kpi-row {{ grid-template-columns:repeat(3,1fr); }} }}
 
-.map-panel {{ background:#16213e; border-radius:12px; overflow:hidden; border:1px solid #0f3460; position:relative; }}
+.map-panel {{ background:#16213e; border-radius:12px; border:1px solid #0f3460; position:relative; overflow:hidden; }}
 #map {{ height:600px; width:100%; }}
+.maplibregl-canvas {{ border-radius:11px; }}
 
 .side-panel {{ display:flex; flex-direction:column; gap:12px; }}
 
@@ -819,195 +820,228 @@ function selectHubs(scores, maxHubs=10, coverageTarget=0.9) {{
 }}
 
 // ═══════════════════════════════════════════════════════════════
-// Map setup
+// Map setup — MapLibre GL JS
 // ═══════════════════════════════════════════════════════════════
-const map = L.map('map', {{ preferCanvas: true }}).setView([37.5665, 126.9780], 11);
-L.tileLayer('https://{{s}}.basemaps.cartocdn.com/dark_all/{{z}}/{{x}}/{{y}}{{r}}.png', {{
-  maxZoom: 19, subdomains: 'abcd'
-}}).addTo(map);
-L.control.attribution({{prefix:false}}).addAttribution('&copy; <a href="https://carto.com/">CARTO</a>').addTo(map);
+const map = new maplibregl.Map({{
+  container: 'map',
+  style: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
+  center: [126.9780, 37.5665],
+  zoom: 11,
+  pitch: 45,
+  bearing: 0,
+  antialias: true,
+}});
+map.addControl(new maplibregl.NavigationControl(), 'top-right');
 
-// ══════════════════════════════════════════════════════════════
-// POI layer groups
-// ══════════════════════════════════════════════════════════════
-// Purple-family palette — visually separate from the green/yellow/orange
-// hex-cell heatmap AND from the neon hub-marker colours
+// Right-click drag → pitch control
+// Drag upward (−dy) = increase pitch (buildings more side-on)
+// Drag downward (+dy) = decrease pitch (more top-down)
+map.dragRotate.disable();
+let _rcDrag = null;
+map.getCanvas().addEventListener('mousedown', e => {{
+  if (e.button !== 2) return;
+  e.preventDefault();
+  _rcDrag = {{ y: e.clientY, pitch: map.getPitch() }};
+}});
+window.addEventListener('mousemove', e => {{
+  if (!_rcDrag) return;
+  const dy = e.clientY - _rcDrag.y;
+  map.setPitch(Math.max(0, Math.min(85, _rcDrag.pitch - dy * 0.35)));
+}});
+window.addEventListener('mouseup', e => {{ if (e.button === 2) _rcDrag = null; }});
+map.getCanvas().addEventListener('contextmenu', e => e.preventDefault());
+
+// ═══════════════════════════════════════════════════════════════
+// POI config (used both in toggle listeners and map.on('load'))
+// ═══════════════════════════════════════════════════════════════
 const POI_CONFIG = {{
-  park:       {{ color:'#ffffff', radius:5,  fillOpacity:0.80, emoji:'🌳' }},  // white
-  commercial: {{ color:'#9c27b0', radius:6,  fillOpacity:0.85, emoji:'🏪' }},  // deep purple
-  medical:    {{ color:'#e040fb', radius:5,  fillOpacity:0.85, emoji:'🏥' }},  // vivid fuchsia
-  subway:     {{ color:'#7c4dff', radius:6,  fillOpacity:0.90, emoji:'🚇' }},  // indigo-violet
-  school:     {{ color:'#b39ddb', radius:5,  fillOpacity:0.80, emoji:'🏫' }},  // periwinkle
+  park:       {{ color:'#ffffff', radius:5,  emoji:'🌳' }},
+  commercial: {{ color:'#9c27b0', radius:6,  emoji:'🏪' }},
+  medical:    {{ color:'#e040fb', radius:5,  emoji:'🏥' }},
+  subway:     {{ color:'#7c4dff', radius:6,  emoji:'🚇' }},
+  school:     {{ color:'#b39ddb', radius:5,  emoji:'🏫' }},
 }};
 
-// Build layer groups (initially empty — added to map when toggled ON)
-const poiGroups = {{}};
-Object.entries(POI_CONFIG).forEach(([cat, cfg]) => {{
-  const group = L.layerGroup();
-  (POI[cat] || []).forEach(p => {{
-    const nameLabel = p.name ? `<b>${{p.name}}</b><br>` : '';
-    L.circleMarker([p.lat, p.lon], {{
-      radius: cfg.radius,
-      fillColor: cfg.color,
-      color: cfg.color,
-      weight: 1.5,
-      fillOpacity: cfg.fillOpacity,
-      opacity: 0.9,
-    }}).bindPopup(
-      `<div style="font-family:'Noto Sans KR';font-size:12px;">` +
-      `${{nameLabel}}${{cfg.emoji}} ${{cat}}</div>`,
-      {{ maxWidth: 180 }}
-    ).addTo(group);
-  }});
-  poiGroups[cat] = group;
-}});
-
-// Toggle POI layers on checkbox click
+// POI toggle buttons — use setLayoutProperty once map is loaded
 document.querySelectorAll('.poi-toggle').forEach(label => {{
   label.addEventListener('click', function(e) {{
     const inp = this.querySelector('input');
     inp.checked = !inp.checked;
     this.classList.toggle('active', inp.checked);
     const cat = this.dataset.poi;
-    if (inp.checked) {{
-      poiGroups[cat].addTo(map);
-    }} else {{
-      poiGroups[cat].remove();
-    }}
+    const vis = inp.checked ? 'visible' : 'none';
+    if (map._loaded) map.setLayoutProperty(`poi-${{cat}}`, 'visibility', vis);
     e.preventDefault();
   }});
 }});
 
 // ── H3 cell layer (3-state: all / hub-related / none) ────────
-let hexMarkers = [];
-function getHexColor(cell, score) {{
-  if (colorMode === 'score') return scoreToColor(score);
-  const mode = COLOR_MODES[colorMode];
-  if (!mode || !mode.field) return scoreToColor(score);
-  if (mode.pop) return popToColor(cell[mode.field] || 0);
-  return densityToColor(cell[mode.field] || 0, mode.max);
+// Uses MapLibre GeoJSON source 'h3-source' + circle layer 'h3-cells'
+function buildH3GeoJSON(scores, filterSet) {{
+  const features = [];
+  GRID.forEach((cell, i) => {{
+    if (filterSet !== null && !filterSet.has(i)) return;
+    features.push({{
+      type: 'Feature',
+      geometry: {{ type: 'Point', coordinates: [cell.lon, cell.lat] }},
+      properties: {{
+        score: scores[i], dong: cell.dong, gu: cell.gu, h3: cell.h3,
+        sa: cell.sa, so: cell.so, sn: cell.sn, st: cell.st, sw: cell.sw,
+        urg: cell.urg, urgv: cell.urgv, ddi: cell.ddi,
+        c_food: cell.c_food || 0,
+        pop_idx: cell.pop_idx || 0, pop_day_idx: cell.pop_day_idx || 0,
+        pop_eve_idx: cell.pop_eve_idx || 0, pop_night_idx: cell.pop_night_idx || 0,
+        pop: cell.pop || 0, pop_day: cell.pop_day || 0,
+        pop_eve: cell.pop_eve || 0, pop_night: cell.pop_night || 0,
+        peak_hour: cell.peak_hour || 0,
+      }}
+    }});
+  }});
+  return {{ type: 'FeatureCollection', features }};
 }}
 
 function renderH3Layer(scores) {{
-  hexMarkers.forEach(m => map.removeLayer(m));
-  hexMarkers = [];
-  if (h3VisMode === 'none') return;
+  if (!map._loaded) return;
+  if (h3VisMode === 'none') {{
+    map.setLayoutProperty('h3-cells', 'visibility', 'none');
+    return;
+  }}
+  map.setLayoutProperty('h3-cells', 'visibility', 'visible');
+  const filterSet = h3VisMode === 'hub' ? lastHubCoveredSet : null;
+  map.getSource('h3-source').setData(buildH3GeoJSON(scores, filterSet));
 
-  scores.forEach((sc, i) => {{
-    if (h3VisMode === 'hub' && !lastHubCoveredSet.has(i)) return;
-    const cell = GRID[i];
-    const fillC = getHexColor(cell, sc);
-    const m = L.circleMarker([cell.lat, cell.lon], {{
-      radius: 5, fillColor: fillC, fillOpacity: 0.7,
-      color: fillC, weight: 0.5, opacity: 0.9
-    }});
-    const storeSection = cell.c_food != null
-      ? `<hr style="border-color:#334;margin:4px 0">` +
-        `<span style="color:#4fc3f7">음식 상권</span>: ${{cell.c_food}}개`
-      : '';
-    const popSection = cell.pop != null
-      ? `<hr style="border-color:#334;margin:4px 0">` +
-        `<span style="color:#ff9800">추정 생활인구</span>: ${{Math.round(cell.pop)}}명<br>` +
-        `주간: ${{Math.round(cell.pop_day)}} | 저녁: ${{Math.round(cell.pop_eve)}} | 야간: ${{Math.round(cell.pop_night)}}<br>` +
-        `피크 시간: ${{cell.peak_hour}}시`
-      : '';
-    m.bindPopup(
-      `<div style="font-family:'Noto Sans KR',sans-serif;font-size:12px;">` +
-      `<b>${{cell.dong}}</b> (${{cell.gu}})<br>` +
-      `종합: <b style="color:${{scoreToColor(sc)}}">${{sc.toFixed(3)}}</b><br>` +
-      `공역: ${{cell.sa}} | 장애물: ${{cell.so}}<br>` +
-      `소음: ${{cell.sn}} | 지형: ${{cell.st}} | 기상: ${{cell.sw}}<br>` +
-      `긴급도: ${{cell.urg}} | 수요지수: ${{cell.ddi}}` +
-      `${{storeSection}}${{popSection}}</div>`
-    );
-    m.addTo(map);
-    hexMarkers.push(m);
-  }});
+  // Update color expression based on colorMode
+  let colorExpr;
+  if (colorMode === 'score') {{
+    colorExpr = ['case',
+      ['<=', ['get', 'score'], 0],    '#e94560',
+      ['<',  ['get', 'score'], 0.2],  '#ff5722',
+      ['<',  ['get', 'score'], 0.4],  '#ff9800',
+      ['<',  ['get', 'score'], 0.6],  '#ffeb3b',
+      ['<',  ['get', 'score'], 0.75], '#8bc34a',
+      ['<',  ['get', 'score'], 0.9],  '#4caf50',
+      '#00c853'
+    ];
+  }} else {{
+    const field = colorMode === 'food' ? 'c_food' :
+                  colorMode === 'pop' ? 'pop_idx' :
+                  colorMode === 'pop_day' ? 'pop_day_idx' :
+                  colorMode === 'pop_eve' ? 'pop_eve_idx' : 'pop_night_idx';
+    // Normalize food by max value; pop fields are already 0-1 indices
+    if (colorMode === 'food') {{
+      const maxFood = Math.max(...GRID.map(c => c.c_food || 0)) || 1;
+      colorExpr = ['interpolate', ['linear'],
+        ['/', ['get', field], maxFood],
+        0, '#1a1a2e', 0.3, '#0d47a1', 0.7, '#1565c0', 1, '#ffeb3b'
+      ];
+    }} else {{
+      colorExpr = ['interpolate', ['linear'], ['get', field],
+        0, '#1a1a2e', 0.3, '#e65100', 0.7, '#ff9800', 1, '#ffeb3b'
+      ];
+    }}
+  }}
+  map.setPaintProperty('h3-cells', 'circle-color', colorExpr);
 }}
 
-// ── Dynamic hub markers ───────────────────────────────────────
-let hubMarkers = [], servicePolys = [], routeLines = [];
+// ── Dynamic hub markers (MapLibre) ───────────────────────────
+let hubMarkers = [];
 
-// Vivid neon palette — distinct from the green/yellow/orange hex-cell heatmap
-// and from the POI layer colours (green, orange, red, blue, yellow)
 const PALETTE = [
-  '#00e5ff',  // electric cyan
-  '#ff4081',  // vivid rose/pink
-  '#b2ff59',  // neon lime
-  '#ffd740',  // vivid amber / gold
-  '#ea80fc',  // vivid orchid / purple
-  '#ff6d00',  // deep orange (brighter than POI orange)
-  '#40c4ff',  // sky blue
-  '#f50057',  // hot pink
-  '#69ff47',  // bright green (different hue from score green)
-  '#ffab40',  // warm amber
+  '#00e5ff', '#ff4081', '#b2ff59', '#ffd740', '#ea80fc',
+  '#ff6d00', '#40c4ff', '#f50057', '#69ff47', '#ffab40',
 ];
 
+// Generate a GeoJSON polygon approximating a circle of radiusM metres
+function makeCirclePolygon(lat, lon, radiusM, color, rank) {{
+  const n = 64;
+  const mPerDegLat = 111320;
+  const mPerDegLon = 111320 * Math.cos(lat * Math.PI / 180);
+  const coords = [];
+  for (let i = 0; i <= n; i++) {{
+    const a = (2 * Math.PI * i) / n;
+    coords.push([lon + radiusM * Math.sin(a) / mPerDegLon,
+                 lat + radiusM * Math.cos(a) / mPerDegLat]);
+  }}
+  return {{ type: 'Feature',
+    properties: {{ color, rank }},
+    geometry: {{ type: 'Polygon', coordinates: [coords] }} }};
+}}
+
 function buildHubLayer(selFacIndices, scores) {{
-  hubMarkers.forEach(m => map.removeLayer(m));
-  servicePolys.forEach(p => map.removeLayer(p));
-  routeLines.forEach(l => map.removeLayer(l));
-  hubMarkers = []; servicePolys = []; routeLines = [];
+  // Remove old hub HTML markers
+  hubMarkers.forEach(m => m.remove());
+  hubMarkers = [];
 
   // Rebuild covered-cell set used by renderH3Layer 'hub' mode
   lastHubCoveredSet = new Set();
   selFacIndices.forEach(fi => COV[fi].forEach(ci => lastHubCoveredSet.add(ci)));
 
+  const serviceFeatures = [];
+  const routeFeatures   = [];
+  const targetFeatures  = [];
+
   selFacIndices.forEach((fi, rank) => {{
-    const fac = FACS[fi];
+    const fac   = FACS[fi];
     const color = PALETTE[rank % PALETTE.length];
 
-    // Hub marker — pin with pulsing glow ring
-    const icon = L.divIcon({{
-      className: '',
-      html: `<div style="position:relative;width:44px;height:44px;">
-               <div style="position:absolute;inset:0;border-radius:50%;
-                 border:3px solid ${{color}};opacity:.45;
-                 animation:hubPulse 1.8s ease-in-out infinite;"></div>
-               <div style="position:absolute;inset:6px;border-radius:50%;
-                 background:radial-gradient(circle,${{color}} 30%,${{color}}cc 100%);
-                 border:2.5px solid #fff;display:flex;align-items:center;
-                 justify-content:center;font-size:16px;color:#fff;
-                 box-shadow:0 0 22px ${{color}},0 0 8px #fff6;">🚁</div>
-             </div>`,
-      iconSize: [44,44], iconAnchor: [22,22], popupAnchor: [0,-24]
-    }});
-    const cov = COV[fi].filter(ci => scores[ci] > 0).length;
+    // Hub HTML marker
+    const el = document.createElement('div');
+    el.style.cssText = 'position:relative;width:44px;height:44px;cursor:pointer;';
+    el.innerHTML =
+      `<div style="position:absolute;inset:0;border-radius:50%;` +
+      `border:3px solid ${{color}};opacity:.45;` +
+      `animation:hubPulse 1.8s ease-in-out infinite;"></div>` +
+      `<div style="position:absolute;inset:6px;border-radius:50%;` +
+      `background:radial-gradient(circle,${{color}} 30%,${{color}}cc 100%);` +
+      `border:2.5px solid #fff;display:flex;align-items:center;` +
+      `justify-content:center;font-size:16px;box-shadow:0 0 22px ${{color}};">🚁</div>`;
+
+    const cov    = COV[fi].filter(ci => scores[ci] > 0).length;
     const hotCov = COV[fi].filter(ci => scores[ci] > 0 && GRID[ci].urgv >= URG_THR).length;
-    // ★ Fix: capture return value of .addTo() directly (avoids brittle _layers lookup)
-    const marker = L.marker([fac.lat, fac.lon], {{icon}})
-      .bindPopup(
-        `<div style="font-family:'Noto Sans KR';font-size:12px;">` +
-        `<b style="font-size:14px;color:${{color}};">#${{rank+1}} ${{fac.name}}</b><br>` +
-        `시설: ${{fac.facility}} | 수용: ${{fac.capacity}}대<br>` +
-        `적합셀 커버: <b>${{cov}}</b>셀 | 핫스팟: <b>${{hotCov}}</b>셀</div>`
-      )
+    const popup  = new maplibregl.Popup({{ offset: 25, maxWidth:'220px' }}).setHTML(
+      `<div style="font-family:'Noto Sans KR';font-size:12px;">` +
+      `<b style="font-size:13px;color:${{color}};">#${{rank+1}} ${{fac.name}}</b><br>` +
+      `시설: ${{fac.facility}}<br>수용: ${{fac.capacity}}대<br>` +
+      `적합셀: <b>${{cov}}</b> | 핫스팟: <b>${{hotCov}}</b></div>`
+    );
+    const marker = new maplibregl.Marker({{ element: el, anchor: 'center' }})
+      .setLngLat([fac.lon, fac.lat])
+      .setPopup(popup)
       .addTo(map);
     hubMarkers.push(marker);
 
-    // Service circle (500m radius)
-    const circle = L.circle([fac.lat, fac.lon], {{
-      radius: 500,
-      color: color, weight: 2.5,
-      fillColor: color, fillOpacity: 0.10,
-      dashArray: '10,5',
-      opacity: 0.85,
-    }}).addTo(map);
-    servicePolys.push(circle);
+    // Service circle polygon (500 m)
+    serviceFeatures.push(makeCirclePolygon(fac.lat, fac.lon, 500, color, rank));
 
-    // Routes: lines from hub to nearest cells with highest scores
+    // Route lines + explicit target point markers (top-5 urgent cells)
     const topCells = COV[fi]
       .filter(ci => scores[ci] > 0 && GRID[ci].urgv >= URG_THR)
-      .sort((a, b) => scores[b] + GRID[b].urgv - scores[a] - GRID[a].urgv)
+      .sort((a, b) => (scores[b] + GRID[b].urgv) - (scores[a] + GRID[a].urgv))
       .slice(0, 5);
     topCells.forEach(ci => {{
-      const cell = GRID[ci];
-      const line = L.polyline([[fac.lat, fac.lon], [cell.lat, cell.lon]], {{
-        color, weight: 2, opacity: 0.55, dashArray: '8,5'
-      }}).addTo(map);
-      routeLines.push(line);
+      routeFeatures.push({{
+        type: 'Feature',
+        properties: {{ color, rank }},
+        geometry: {{ type: 'LineString',
+          coordinates: [[fac.lon, fac.lat], [GRID[ci].lon, GRID[ci].lat]] }}
+      }});
+      targetFeatures.push({{
+        type: 'Feature',
+        properties: {{
+          color, rank,
+          dong: GRID[ci].dong, gu: GRID[ci].gu, h3: GRID[ci].h3,
+          score: scores[ci], urg: GRID[ci].urg, urgv: GRID[ci].urgv, ddi: GRID[ci].ddi
+        }},
+        geometry: {{ type: 'Point', coordinates: [GRID[ci].lon, GRID[ci].lat] }}
+      }});
     }});
   }});
+
+  if (map._loaded) {{
+    map.getSource('service-circles').setData({{ type: 'FeatureCollection', features: serviceFeatures }});
+    map.getSource('route-lines').setData({{ type: 'FeatureCollection', features: routeFeatures }});
+    map.getSource('target-points').setData({{ type: 'FeatureCollection', features: targetFeatures }});
+  }}
 }}
 
 // ── Render hub list panel ─────────────────────────────────────
@@ -1047,6 +1081,7 @@ function renderHubList(selFacIndices, scores, hotspots) {{
 // Master update function — runs on every layer toggle
 // ═══════════════════════════════════════════════════════════════
 function updateDashboard() {{
+  if (!map._loaded) return;
   const active = getActiveLayers();
 
   // 1. Recompute all cell scores
@@ -1087,6 +1122,177 @@ function updateDashboard() {{
     parts.length ? parts.join(' × ') : '(선택 없음 — 모든 셀 점수 0)';
 }}
 
+// ═══════════════════════════════════════════════════════════════
+// map.on('load') — create all GeoJSON sources + layers, then initial render
+// ═══════════════════════════════════════════════════════════════
+map.on('load', () => {{
+  map._loaded = true;
+
+  // ── H3 source + circle layer ──────────────────────────────
+  map.addSource('h3-source', {{ type:'geojson', data:{{ type:'FeatureCollection', features:[] }} }});
+  map.addLayer({{
+    id: 'h3-cells', type: 'circle', source: 'h3-source',
+    paint: {{
+      'circle-radius': 5,
+      'circle-color': '#4caf50',
+      'circle-opacity': 0.7,
+    }},
+    layout: {{ visibility: 'visible' }}
+  }});
+
+  // Click popup on H3 cells
+  map.on('click', 'h3-cells', e => {{
+    const p = e.features[0].properties;
+    const sc = p.score || 0;
+    const storeSection = p.c_food > 0
+      ? `<hr style="border-color:#334;margin:4px 0"><span style="color:#4fc3f7">음식 상권</span>: ${{p.c_food}}개` : '';
+    const popSection = p.pop > 0
+      ? `<hr style="border-color:#334;margin:4px 0"><span style="color:#ff9800">추정 생활인구</span>: ${{Math.round(p.pop)}}명<br>주간: ${{Math.round(p.pop_day)}} | 저녁: ${{Math.round(p.pop_eve)}} | 야간: ${{Math.round(p.pop_night)}}<br>피크: ${{p.peak_hour}}시` : '';
+    new maplibregl.Popup()
+      .setLngLat(e.lngLat)
+      .setHTML(
+        `<div style="font-family:'Noto Sans KR';font-size:12px;">` +
+        `<b>${{p.dong}}</b> (${{p.gu}})<br>` +
+        `종합: <b>${{sc.toFixed(3)}}</b><br>` +
+        `공역: ${{p.sa}} | 장애물: ${{p.so}}<br>` +
+        `소음: ${{p.sn}} | 지형: ${{p.st}} | 기상: ${{p.sw}}<br>` +
+        `긴급도: ${{p.urg}} | 수요지수: ${{p.ddi}}${{storeSection}}${{popSection}}</div>`
+      ).addTo(map);
+  }});
+  map.on('mouseenter', 'h3-cells', () => map.getCanvas().style.cursor = 'pointer');
+  map.on('mouseleave', 'h3-cells', () => map.getCanvas().style.cursor = '');
+
+  // ── Service circles ───────────────────────────────────────
+  map.addSource('service-circles', {{ type:'geojson', data:{{ type:'FeatureCollection', features:[] }} }});
+  map.addLayer({{
+    id: 'service-circles-fill', type: 'fill', source: 'service-circles',
+    paint: {{ 'fill-color': ['get', 'color'], 'fill-opacity': 0.07 }}
+  }});
+  map.addLayer({{
+    id: 'service-circles-outline', type: 'line', source: 'service-circles',
+    paint: {{ 'line-color': ['get', 'color'], 'line-width': 2, 'line-opacity': 0.8, 'line-dasharray': [3, 2] }}
+  }});
+
+  // ── Route lines ───────────────────────────────────────────
+  map.addSource('route-lines', {{ type:'geojson', data:{{ type:'FeatureCollection', features:[] }} }});
+  map.addLayer({{
+    id: 'route-lines-layer', type: 'line', source: 'route-lines',
+    paint: {{ 'line-color': ['get', 'color'], 'line-width': 2, 'line-opacity': 0.55, 'line-dasharray': [4, 3] }}
+  }});
+
+  // ── Target points ─────────────────────────────────────────
+  map.addSource('target-points', {{ type:'geojson', data:{{ type:'FeatureCollection', features:[] }} }});
+  map.addLayer({{
+    id: 'target-points-layer', type: 'circle', source: 'target-points',
+    paint: {{
+      'circle-radius': 6,
+      'circle-color': ['get', 'color'],
+      'circle-opacity': 0.9,
+      'circle-stroke-width': 1.5,
+      'circle-stroke-color': '#ffffff',
+    }}
+  }});
+  map.on('click', 'target-points-layer', e => {{
+    const p = e.features[0].properties;
+    new maplibregl.Popup()
+      .setLngLat(e.lngLat)
+      .setHTML(
+        `<div style="font-family:'Noto Sans KR';font-size:12px;">` +
+        `<b>${{p.dong}}</b> (${{p.gu}})<br>` +
+        `H3: <code style="font-size:10px">${{p.h3}}</code><br>` +
+        `종합: <b>${{parseFloat(p.score).toFixed(3)}}</b><br>` +
+        `긴급도: ${{p.urg}} | 수요지수: ${{p.ddi}}</div>`
+      ).addTo(map);
+  }});
+  map.on('mouseenter', 'target-points-layer', () => map.getCanvas().style.cursor = 'pointer');
+  map.on('mouseleave', 'target-points-layer', () => map.getCanvas().style.cursor = '');
+
+  // ── POI sources + layers ──────────────────────────────────
+  Object.entries(POI_CONFIG).forEach(([cat, cfg]) => {{
+    const features = (POI[cat] || []).map(p => ({{
+      type: 'Feature',
+      geometry: {{ type: 'Point', coordinates: [p.lon, p.lat] }},
+      properties: {{ name: p.name || '' }}
+    }}));
+    map.addSource(`poi-${{cat}}`, {{ type:'geojson', data:{{ type:'FeatureCollection', features }} }});
+    map.addLayer({{
+      id: `poi-${{cat}}`, type: 'circle', source: `poi-${{cat}}`,
+      paint: {{
+        'circle-radius': cfg.radius,
+        'circle-color': cfg.color,
+        'circle-opacity': 0.85,
+        'circle-stroke-width': 1,
+        'circle-stroke-color': cfg.color,
+      }},
+      layout: {{ visibility: 'none' }}
+    }});
+    map.on('click', `poi-${{cat}}`, e => {{
+      const name = e.features[0].properties.name;
+      new maplibregl.Popup()
+        .setLngLat(e.lngLat)
+        .setHTML(`<div style="font-family:'Noto Sans KR';font-size:12px;">${{cfg.emoji}} ${{name || cat}}</div>`)
+        .addTo(map);
+    }});
+  }});
+
+  // ── 3D Buildings ──────────────────────────────────────────
+  map.addSource('buildings-3d', {{
+    type: 'geojson',
+    data: {{ type: 'FeatureCollection', features: [] }},
+  }});
+  map.addLayer({{
+    id: 'buildings-3d-layer',
+    type: 'fill-extrusion',
+    source: 'buildings-3d',
+    minzoom: 12,
+    paint: {{
+      'fill-extrusion-color': [
+        'interpolate', ['linear'], ['get', 'height_m'],
+         0,  '#1a2a3a',
+        30,  '#1e3a5f',
+        80,  '#1e4976',
+        150, '#1a5276',
+        300, '#145374',
+      ],
+      'fill-extrusion-height':   ['get', 'height_m'],
+      'fill-extrusion-base':     0,
+      'fill-extrusion-opacity':  0.75,
+      'fill-extrusion-vertical-gradient': true,
+    }},
+  }});
+  fetch('./tableau_data/seoul_buildings_3d.geojson')
+    .then(r => r.json())
+    .then(data => {{
+      map.getSource('buildings-3d').setData(data);
+      console.log('3D buildings loaded:', data.features.length, 'features');
+    }})
+    .catch(err => console.warn('Buildings load failed (need http server):', err));
+
+  // ── Terrain (Terrarium tiles, free, no API key) ───────────
+  map.addSource('terrain-dem', {{
+    type: 'raster-dem',
+    tiles: ['https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{{z}}/{{x}}/{{y}}.png'],
+    encoding: 'terrarium',
+    tileSize: 256,
+    maxzoom: 15,
+    attribution: 'Terrain &copy; <a href="https://registry.opendata.aws/terrain-tiles/">Mapzen/AWS</a>',
+  }});
+  map.setTerrain({{ source: 'terrain-dem', exaggeration: 1.5 }});
+  map.addLayer({{
+    id: 'hillshade', type: 'hillshade', source: 'terrain-dem',
+    paint: {{
+      'hillshade-exaggeration': 0.5,
+      'hillshade-shadow-color': '#0a0a1a',
+      'hillshade-highlight-color': '#1e3a5f',
+      'hillshade-accent-color': '#0f2a4a',
+      'hillshade-illumination-anchor': 'map',
+    }},
+  }}, 'h3-cells');   // insert below h3 cells so mountains don't cover data
+
+  // ── Initial dashboard render ──────────────────────────────
+  updateDashboard();
+}});
+
 // ── Layer toggle events ───────────────────────────────────────
 document.querySelectorAll('.layer-toggle').forEach(label => {{
   label.addEventListener('click', function(e) {{
@@ -1105,9 +1311,6 @@ document.getElementById('color-mode-select').addEventListener('change', function
   colorMode = this.value;
   if (window._lastScores) renderH3Layer(window._lastScores);
 }});
-
-// Initial render
-updateDashboard();
 
 // ═══════════════════════════════════════════════════════════════
 // Static charts (Plotly)
