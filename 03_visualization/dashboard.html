@@ -964,18 +964,23 @@ map.on('load', () => {
     source: 'buildings-3d',
     minzoom: 12,
     paint: {
+      // Distinct blue-gray palette that contrasts against the dark basemap.
+      // Lighter shades for taller buildings so height reads clearly.
       'fill-extrusion-color': [
         'interpolate', ['linear'], ['get', 'height_m'],
-         0,  '#1a2a3a',
-        30,  '#1e3a5f',
-        80,  '#1e4976',
-        150, '#1a5276',
-        300, '#145374',
+         15, '#2e6da4',
+         30, '#3d85c8',
+         60, '#5ba3d9',
+        120, '#7ebfe8',
+        200, '#a8d8f2',
+        300, '#cceeff',
       ],
-      'fill-extrusion-height':   ['get', 'height_m'],
-      'fill-extrusion-base':     0,
-      'fill-extrusion-opacity':  0.75,
-      'fill-extrusion-vertical-gradient': true,
+      'fill-extrusion-height':  ['get', 'height_m'],
+      'fill-extrusion-base':    0,
+      'fill-extrusion-opacity': 0.92,
+      // Disable gradient: prevents wall faces from getting terrain-like slope shading
+      // that makes adjacent buildings blur into a hill surface.
+      'fill-extrusion-vertical-gradient': false,
     },
   });
   fetch('./tableau_data/seoul_buildings_3d.geojson')
