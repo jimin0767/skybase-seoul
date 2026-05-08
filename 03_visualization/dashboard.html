@@ -65,11 +65,18 @@ body { font-family:'Noto Sans KR',sans-serif; background:#0f0f1a; color:#e0e0e0;
 .formula-box { margin-top:10px; padding:8px 12px; background:#0a1020; border-radius:6px; border:1px solid #1a3a5c; font-size:11px; color:#7ba; }
 .formula-box b { color:#4fc3f7; }
 
-/* Hub results panel */
-.hub-panel { background:linear-gradient(145deg,#16213e,#1a1a2e); border:1px solid #0f3460; border-radius:12px; padding:16px 18px; flex:1; min-height:0; }
-#hub-list { margin-top:8px; display:flex; flex-direction:column; gap:7px; }
+/* Full-width hub section below map row */
+.hub-section {
+  background: linear-gradient(145deg,#16213e,#1a1a2e);
+  border: 1px solid #0f3460; border-radius:12px; padding:16px 20px; margin-bottom:16px;
+}
+.hub-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 10px; margin-top: 4px;
+}
 .hub-item {
-  background:#0f1928; border:1px solid #1a3a5c; border-radius:8px; padding:10px 12px;
+  background:#0f1928; border:1px solid #1a3a5c; border-radius:8px; padding:12px 14px;
   transition:all .35s ease; position:relative; overflow:hidden;
 }
 .hub-item.new-hub { border-color:#53d769; background:#0a1f0f; animation:hubPop .5s ease; }
@@ -211,6 +218,23 @@ select option { background:#0f1928; color:#e0e0e0; }
             <option value="pop_night">🌙 야간 생활인구</option>
           </select>
         </div>
+        <div style="margin-top:10px;">
+          <label style="font-size:11px;color:#8899aa;">🔲 H3 셀 표시 모드</label>
+          <div id="h3-vis-control" style="display:flex;gap:6px;margin-top:4px;">
+            <button class="h3-vis-btn" data-mode="all"
+              style="flex:1;padding:6px 4px;font-size:10px;font-family:'Noto Sans KR';
+                     background:#0f1928;color:#8899aa;border:1px solid #1a3a5c;
+                     border-radius:6px;cursor:pointer;">전체 H3 표시</button>
+            <button class="h3-vis-btn h3-vis-active" data-mode="hub"
+              style="flex:1;padding:6px 4px;font-size:10px;font-family:'Noto Sans KR';
+                     background:#0f3460;color:#4fc3f7;border:1px solid #4fc3f7;
+                     border-radius:6px;cursor:pointer;">거점 관련만</button>
+            <button class="h3-vis-btn" data-mode="none"
+              style="flex:1;padding:6px 4px;font-size:10px;font-family:'Noto Sans KR';
+                     background:#0f1928;color:#8899aa;border:1px solid #1a3a5c;
+                     border-radius:6px;cursor:pointer;">H3 숨김</button>
+          </div>
+        </div>
       </div>
 
       <!-- POI Layer Toggles -->
@@ -249,14 +273,17 @@ select option { background:#0f1928; color:#e0e0e0; }
           </label>
         </div>
       </div>
+    </div>
+  </div>
 
-      <!-- Dynamic Hub Results -->
-      <div class="hub-panel">
-        <div class="panel-title">📍 최적 거점 <span id="hub-count-badge" style="background:#e9456033;color:#e94560;border-radius:10px;padding:1px 8px;font-size:12px;"></span></div>
-        <div id="hub-list">
-          <div style="color:#556;font-size:12px;padding:8px;">레이어 조합 중…</div>
-        </div>
-      </div>
+  <!-- Full-width Hub Results — below map + controls row -->
+  <div class="hub-section">
+    <div class="panel-title" style="margin-bottom:12px;">
+      📍 최적 거점
+      <span id="hub-count-badge" style="background:#e9456033;color:#e94560;border-radius:10px;padding:1px 8px;font-size:12px;margin-left:8px;"></span>
+    </div>
+    <div id="hub-list" class="hub-grid">
+      <div style="color:#556;font-size:12px;padding:8px;">레이어 조합 중…</div>
     </div>
   </div>
 
@@ -323,6 +350,21 @@ const POI      = {"medical": [{"lat": 37.32886, "lon": 127.11563, "name": ""}, {
 // Utilities
 // ═══════════════════════════════════════════════════════════════
 let colorMode = 'score';
+let h3VisMode = 'hub';            // 'all' | 'hub' | 'none'
+let lastHubCoveredSet = new Set(); // cell indices covered by current hubs
+
+document.querySelectorAll('.h3-vis-btn').forEach(btn => {
+  btn.addEventListener('click', function() {
+    h3VisMode = this.dataset.mode;
+    document.querySelectorAll('.h3-vis-btn').forEach(b => {
+      const on = b.dataset.mode === h3VisMode;
+      b.style.background   = on ? '#0f3460' : '#0f1928';
+      b.style.color        = on ? '#4fc3f7' : '#8899aa';
+      b.style.borderColor  = on ? '#4fc3f7' : '#1a3a5c';
+    });
+    if (window._lastScores) renderH3Layer(window._lastScores);
+  });
+});
 
 function scoreToColor(v) {
   if (v <= 0)   return '#e94560';
@@ -503,7 +545,7 @@ document.querySelectorAll('.poi-toggle').forEach(label => {
   });
 });
 
-// ── Hex cell layer ────────────────────────────────────────────
+// ── H3 cell layer (3-state: all / hub-related / none) ────────
 let hexMarkers = [];
 function getHexColor(cell, score) {
   if (colorMode === 'score') return scoreToColor(score);
@@ -513,13 +555,14 @@ function getHexColor(cell, score) {
   return densityToColor(cell[mode.field] || 0, mode.max);
 }
 
-function buildHexLayer(scores) {
+function renderH3Layer(scores) {
   hexMarkers.forEach(m => map.removeLayer(m));
   hexMarkers = [];
-  let total = 0, n = 0;
+  if (h3VisMode === 'none') return;
+
   scores.forEach((sc, i) => {
+    if (h3VisMode === 'hub' && !lastHubCoveredSet.has(i)) return;
     const cell = GRID[i];
-    total += sc; n++;
     const fillC = getHexColor(cell, sc);
     const m = L.circleMarker([cell.lat, cell.lon], {
       radius: 5, fillColor: fillC, fillOpacity: 0.7,
@@ -547,7 +590,6 @@ function buildHexLayer(scores) {
     m.addTo(map);
     hexMarkers.push(m);
   });
-  document.getElementById('kpi-avg-cs').textContent = (total / n).toFixed(3);
 }
 
 // ── Dynamic hub markers ───────────────────────────────────────
@@ -573,6 +615,10 @@ function buildHubLayer(selFacIndices, scores) {
   servicePolys.forEach(p => map.removeLayer(p));
   routeLines.forEach(l => map.removeLayer(l));
   hubMarkers = []; servicePolys = []; routeLines = [];
+
+  // Rebuild covered-cell set used by renderH3Layer 'hub' mode
+  lastHubCoveredSet = new Set();
+  selFacIndices.forEach(fi => COV[fi].forEach(ci => lastHubCoveredSet.add(ci)));
 
   selFacIndices.forEach((fi, rank) => {
     const fac = FACS[fi];
@@ -673,8 +719,10 @@ function updateDashboard() {
   // 1. Recompute all cell scores
   const scores = GRID.map(cell => recalcScore(cell, active));
 
-  // 2. Update hex map
-  buildHexLayer(scores);
+  // 2. Avg composite KPI — computed directly from scores, independent of H3 rendering
+  const avgCs = scores.reduce((s, v) => s + v, 0) / scores.length;
+  document.getElementById('kpi-avg-cs').textContent = avgCs.toFixed(3);
+  window._lastScores = scores;
 
   // 3. Run greedy set-cover
   const result = selectHubs(scores);
@@ -683,20 +731,23 @@ function updateDashboard() {
   const hotspots = result.hotspots;
   const uncovered = result.uncovered;
 
-  // 4. Rebuild hub map layer
+  // 4. Hub layer first — populates lastHubCoveredSet used by renderH3Layer
   buildHubLayer(selFacIndices, scores);
 
-  // 5. Update hub list panel
+  // 5. H3 layer after — uses lastHubCoveredSet for 'hub' mode
+  renderH3Layer(scores);
+
+  // 6. Update hub list panel
   renderHubList(selFacIndices, scores, hotspots);
 
-  // 6. Update KPIs
+  // 7. Update KPIs
   document.getElementById('kpi-feasible').textContent = feasible.size.toLocaleString();
   document.getElementById('kpi-num-hubs').textContent = selFacIndices.length;
   const coveredHots = hotspots.size - (uncovered ? uncovered.size : 0);
   const covPct = hotspots.size > 0 ? (coveredHots / hotspots.size * 100).toFixed(1) : '0.0';
   document.getElementById('kpi-coverage').textContent = covPct + '%';
 
-  // 7. Update formula display
+  // 8. Update formula display
   const names = {sa:'공역',so:'장애물',sn:'소음',st:'지형',sw:'기상'};
   const parts = Object.entries(active).filter(([,v])=>v).map(([k])=>names[k]);
   document.getElementById('formula-display').textContent =
@@ -716,10 +767,10 @@ document.querySelectorAll('.layer-toggle').forEach(label => {
   });
 });
 
-// Color mode selector
+// Color mode selector — only re-draws H3 layer, doesn't rerun hub selection
 document.getElementById('color-mode-select').addEventListener('change', function() {
   colorMode = this.value;
-  updateDashboard();
+  if (window._lastScores) renderH3Layer(window._lastScores);
 });
 
 // Initial render
