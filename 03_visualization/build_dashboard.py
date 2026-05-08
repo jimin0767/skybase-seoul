@@ -1319,8 +1319,26 @@ map.on('load', () => {{
     }})
     .catch(err => console.warn('Buildings load failed (need http server):', err));
 
-  // Terrain removed: setTerrain() warps fill-extrusion bases over the DEM mesh,
-  // turning buildings into blobby hillside shapes. 3D pitch provides sufficient depth.
+  // ── Terrain hillshade (mountains visualized, no setTerrain so buildings stay crisp) ──
+  // raster-dem + hillshade layer gives mountain shading without deforming fill-extrusion geometry.
+  map.addSource('terrain-dem', {{
+    type: 'raster-dem',
+    tiles: ['https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{{z}}/{{x}}/{{y}}.png'],
+    encoding: 'terrarium',
+    tileSize: 256,
+    maxzoom: 15,
+    attribution: 'Terrain &copy; <a href="https://registry.opendata.aws/terrain-tiles/">Mapzen/AWS</a>',
+  }});
+  map.addLayer({{
+    id: 'hillshade', type: 'hillshade', source: 'terrain-dem',
+    paint: {{
+      'hillshade-exaggeration': 0.6,
+      'hillshade-shadow-color': '#0a0a1a',
+      'hillshade-highlight-color': '#1e3a5f',
+      'hillshade-accent-color': '#0f2a4a',
+      'hillshade-illumination-anchor': 'map',
+    }},
+  }}, 'h3-cells');
 
   // ── Initial dashboard render ──────────────────────────────
   updateDashboard();
