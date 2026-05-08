@@ -4,8 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>서울시 드론·로봇 배송 거점 최적화</title>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.css"/>
+<script src="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.js"></script>
 <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <style>
@@ -44,8 +44,9 @@ body { font-family:'Noto Sans KR',sans-serif; background:#0f0f1a; color:#e0e0e0;
 .main-grid { display:grid; grid-template-columns:1fr 420px; gap:16px; margin-bottom:16px; }
 @media(max-width:1100px) { .main-grid { grid-template-columns:1fr; } .kpi-row { grid-template-columns:repeat(3,1fr); } }
 
-.map-panel { background:#16213e; border-radius:12px; overflow:hidden; border:1px solid #0f3460; position:relative; }
+.map-panel { background:#16213e; border-radius:12px; border:1px solid #0f3460; position:relative; overflow:hidden; }
 #map { height:600px; width:100%; }
+.maplibregl-canvas { border-radius:11px; }
 
 .side-panel { display:flex; flex-direction:column; gap:12px; }
 
@@ -65,11 +66,18 @@ body { font-family:'Noto Sans KR',sans-serif; background:#0f0f1a; color:#e0e0e0;
 .formula-box { margin-top:10px; padding:8px 12px; background:#0a1020; border-radius:6px; border:1px solid #1a3a5c; font-size:11px; color:#7ba; }
 .formula-box b { color:#4fc3f7; }
 
-/* Hub results panel */
-.hub-panel { background:linear-gradient(145deg,#16213e,#1a1a2e); border:1px solid #0f3460; border-radius:12px; padding:16px 18px; flex:1; min-height:0; }
-#hub-list { margin-top:8px; display:flex; flex-direction:column; gap:7px; }
+/* Full-width hub section below map row */
+.hub-section {
+  background: linear-gradient(145deg,#16213e,#1a1a2e);
+  border: 1px solid #0f3460; border-radius:12px; padding:16px 20px; margin-bottom:16px;
+}
+.hub-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 10px; margin-top: 4px;
+}
 .hub-item {
-  background:#0f1928; border:1px solid #1a3a5c; border-radius:8px; padding:10px 12px;
+  background:#0f1928; border:1px solid #1a3a5c; border-radius:8px; padding:12px 14px;
   transition:all .35s ease; position:relative; overflow:hidden;
 }
 .hub-item.new-hub { border-color:#53d769; background:#0a1f0f; animation:hubPop .5s ease; }
@@ -211,6 +219,23 @@ select option { background:#0f1928; color:#e0e0e0; }
             <option value="pop_night">🌙 야간 생활인구</option>
           </select>
         </div>
+        <div style="margin-top:10px;">
+          <label style="font-size:11px;color:#8899aa;">🔲 H3 셀 표시 모드</label>
+          <div id="h3-vis-control" style="display:flex;gap:6px;margin-top:4px;">
+            <button class="h3-vis-btn" data-mode="all"
+              style="flex:1;padding:6px 4px;font-size:10px;font-family:'Noto Sans KR';
+                     background:#0f1928;color:#8899aa;border:1px solid #1a3a5c;
+                     border-radius:6px;cursor:pointer;">전체 H3 표시</button>
+            <button class="h3-vis-btn h3-vis-active" data-mode="hub"
+              style="flex:1;padding:6px 4px;font-size:10px;font-family:'Noto Sans KR';
+                     background:#0f3460;color:#4fc3f7;border:1px solid #4fc3f7;
+                     border-radius:6px;cursor:pointer;">거점 관련만</button>
+            <button class="h3-vis-btn" data-mode="none"
+              style="flex:1;padding:6px 4px;font-size:10px;font-family:'Noto Sans KR';
+                     background:#0f1928;color:#8899aa;border:1px solid #1a3a5c;
+                     border-radius:6px;cursor:pointer;">H3 숨김</button>
+          </div>
+        </div>
       </div>
 
       <!-- POI Layer Toggles -->
@@ -249,14 +274,17 @@ select option { background:#0f1928; color:#e0e0e0; }
           </label>
         </div>
       </div>
+    </div>
+  </div>
 
-      <!-- Dynamic Hub Results -->
-      <div class="hub-panel">
-        <div class="panel-title">📍 최적 거점 <span id="hub-count-badge" style="background:#e9456033;color:#e94560;border-radius:10px;padding:1px 8px;font-size:12px;"></span></div>
-        <div id="hub-list">
-          <div style="color:#556;font-size:12px;padding:8px;">레이어 조합 중…</div>
-        </div>
-      </div>
+  <!-- Full-width Hub Results — below map + controls row -->
+  <div class="hub-section">
+    <div class="panel-title" style="margin-bottom:12px;">
+      📍 최적 거점
+      <span id="hub-count-badge" style="background:#e9456033;color:#e94560;border-radius:10px;padding:1px 8px;font-size:12px;margin-left:8px;"></span>
+    </div>
+    <div id="hub-list" class="hub-grid">
+      <div style="color:#556;font-size:12px;padding:8px;">레이어 조합 중…</div>
     </div>
   </div>
 
@@ -323,6 +351,21 @@ const POI      = {"medical": [{"lat": 37.32886, "lon": 127.11563, "name": ""}, {
 // Utilities
 // ═══════════════════════════════════════════════════════════════
 let colorMode = 'score';
+let h3VisMode = 'hub';            // 'all' | 'hub' | 'none'
+let lastHubCoveredSet = new Set(); // cell indices covered by current hubs
+
+document.querySelectorAll('.h3-vis-btn').forEach(btn => {
+  btn.addEventListener('click', function() {
+    h3VisMode = this.dataset.mode;
+    document.querySelectorAll('.h3-vis-btn').forEach(b => {
+      const on = b.dataset.mode === h3VisMode;
+      b.style.background   = on ? '#0f3460' : '#0f1928';
+      b.style.color        = on ? '#4fc3f7' : '#8899aa';
+      b.style.borderColor  = on ? '#4fc3f7' : '#1a3a5c';
+    });
+    if (window._lastScores) renderH3Layer(window._lastScores);
+  });
+});
 
 function scoreToColor(v) {
   if (v <= 0)   return '#e94560';
@@ -444,191 +487,217 @@ function selectHubs(scores, maxHubs=10, coverageTarget=0.9) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Map setup
+// Map setup — MapLibre GL JS
 // ═══════════════════════════════════════════════════════════════
-const map = L.map('map', { preferCanvas: true }).setView([37.5665, 126.9780], 11);
-L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-  maxZoom: 19, subdomains: 'abcd'
-}).addTo(map);
-L.control.attribution({prefix:false}).addAttribution('&copy; <a href="https://carto.com/">CARTO</a>').addTo(map);
+const map = new maplibregl.Map({
+  container: 'map',
+  style: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
+  center: [126.9780, 37.5665],
+  zoom: 11,
+  pitch: 45,
+  bearing: 0,
+  antialias: true,
+});
+map.addControl(new maplibregl.NavigationControl(), 'top-right');
 
-// ══════════════════════════════════════════════════════════════
-// POI layer groups
-// ══════════════════════════════════════════════════════════════
-// Purple-family palette — visually separate from the green/yellow/orange
-// hex-cell heatmap AND from the neon hub-marker colours
+// ── Pitch controls ────────────────────────────────────────────
+// Two-finger touchpad swipe → pitch (disable default scroll-zoom)
+// Swipe up (−deltaY) = increase pitch (more side-on)
+// Swipe down (+deltaY) = decrease pitch (more top-down)
+map.scrollZoom.disable();
+map.getCanvas().addEventListener('wheel', e => {
+  e.preventDefault();
+  const newPitch = Math.max(0, Math.min(75, map.getPitch() - e.deltaY * 0.15));
+  map.setPitch(newPitch);
+}, { passive: false });
+
+// Right-click drag → also controls pitch (for mouse users)
+// Drag upward (−dy) = increase pitch; drag downward (+dy) = decrease pitch
+map.dragRotate.disable();
+let _rcDrag = null;
+map.getCanvas().addEventListener('mousedown', e => {
+  if (e.button !== 2) return;
+  e.preventDefault();
+  _rcDrag = { y: e.clientY, pitch: map.getPitch() };
+});
+window.addEventListener('mousemove', e => {
+  if (!_rcDrag) return;
+  const dy = e.clientY - _rcDrag.y;
+  map.setPitch(Math.max(0, Math.min(75, _rcDrag.pitch - dy * 0.35)));
+});
+window.addEventListener('mouseup', e => { if (e.button === 2) _rcDrag = null; });
+map.getCanvas().addEventListener('contextmenu', e => e.preventDefault());
+
+// ═══════════════════════════════════════════════════════════════
+// POI config (used both in toggle listeners and map.on('load'))
+// ═══════════════════════════════════════════════════════════════
 const POI_CONFIG = {
-  park:       { color:'#ffffff', radius:5,  fillOpacity:0.80, emoji:'🌳' },  // white
-  commercial: { color:'#9c27b0', radius:6,  fillOpacity:0.85, emoji:'🏪' },  // deep purple
-  medical:    { color:'#e040fb', radius:5,  fillOpacity:0.85, emoji:'🏥' },  // vivid fuchsia
-  subway:     { color:'#7c4dff', radius:6,  fillOpacity:0.90, emoji:'🚇' },  // indigo-violet
-  school:     { color:'#b39ddb', radius:5,  fillOpacity:0.80, emoji:'🏫' },  // periwinkle
+  park:       { color:'#ffffff', radius:5,  emoji:'🌳' },
+  commercial: { color:'#9c27b0', radius:6,  emoji:'🏪' },
+  medical:    { color:'#e040fb', radius:5,  emoji:'🏥' },
+  subway:     { color:'#7c4dff', radius:6,  emoji:'🚇' },
+  school:     { color:'#b39ddb', radius:5,  emoji:'🏫' },
 };
 
-// Build layer groups (initially empty — added to map when toggled ON)
-const poiGroups = {};
-Object.entries(POI_CONFIG).forEach(([cat, cfg]) => {
-  const group = L.layerGroup();
-  (POI[cat] || []).forEach(p => {
-    const nameLabel = p.name ? `<b>${p.name}</b><br>` : '';
-    L.circleMarker([p.lat, p.lon], {
-      radius: cfg.radius,
-      fillColor: cfg.color,
-      color: cfg.color,
-      weight: 1.5,
-      fillOpacity: cfg.fillOpacity,
-      opacity: 0.9,
-    }).bindPopup(
-      `<div style="font-family:'Noto Sans KR';font-size:12px;">` +
-      `${nameLabel}${cfg.emoji} ${cat}</div>`,
-      { maxWidth: 180 }
-    ).addTo(group);
-  });
-  poiGroups[cat] = group;
-});
-
-// Toggle POI layers on checkbox click
+// POI toggle buttons — use setLayoutProperty once map is loaded
 document.querySelectorAll('.poi-toggle').forEach(label => {
   label.addEventListener('click', function(e) {
     const inp = this.querySelector('input');
     inp.checked = !inp.checked;
     this.classList.toggle('active', inp.checked);
     const cat = this.dataset.poi;
-    if (inp.checked) {
-      poiGroups[cat].addTo(map);
-    } else {
-      poiGroups[cat].remove();
-    }
+    const vis = inp.checked ? 'visible' : 'none';
+    if (map._loaded) map.setLayoutProperty(`poi-${cat}`, 'visibility', vis);
     e.preventDefault();
   });
 });
 
-// ── Hex cell layer ────────────────────────────────────────────
-let hexMarkers = [];
-function getHexColor(cell, score) {
-  if (colorMode === 'score') return scoreToColor(score);
-  const mode = COLOR_MODES[colorMode];
-  if (!mode || !mode.field) return scoreToColor(score);
-  if (mode.pop) return popToColor(cell[mode.field] || 0);
-  return densityToColor(cell[mode.field] || 0, mode.max);
-}
-
-function buildHexLayer(scores) {
-  hexMarkers.forEach(m => map.removeLayer(m));
-  hexMarkers = [];
-  let total = 0, n = 0;
-  scores.forEach((sc, i) => {
-    const cell = GRID[i];
-    total += sc; n++;
-    const fillC = getHexColor(cell, sc);
-    const m = L.circleMarker([cell.lat, cell.lon], {
-      radius: 5, fillColor: fillC, fillOpacity: 0.7,
-      color: fillC, weight: 0.5, opacity: 0.9
+// ── H3 cell layer (3-state: all / hub-related / none) ────────
+// Uses MapLibre GeoJSON source 'h3-source' + circle layer 'h3-cells'
+function buildH3GeoJSON(scores, filterSet) {
+  const features = [];
+  GRID.forEach((cell, i) => {
+    if (filterSet !== null && !filterSet.has(i)) return;
+    features.push({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [cell.lon, cell.lat] },
+      properties: {
+        score: scores[i], dong: cell.dong, gu: cell.gu, h3: cell.h3,
+        sa: cell.sa, so: cell.so, sn: cell.sn, st: cell.st, sw: cell.sw,
+        urg: cell.urg, urgv: cell.urgv, ddi: cell.ddi,
+        c_food: cell.c_food || 0,
+        pop_idx: cell.pop_idx || 0, pop_day_idx: cell.pop_day_idx || 0,
+        pop_eve_idx: cell.pop_eve_idx || 0, pop_night_idx: cell.pop_night_idx || 0,
+        pop: cell.pop || 0, pop_day: cell.pop_day || 0,
+        pop_eve: cell.pop_eve || 0, pop_night: cell.pop_night || 0,
+        peak_hour: cell.peak_hour || 0,
+      }
     });
-    const storeSection = cell.c_food != null
-      ? `<hr style="border-color:#334;margin:4px 0">` +
-        `<span style="color:#4fc3f7">음식 상권</span>: ${cell.c_food}개`
-      : '';
-    const popSection = cell.pop != null
-      ? `<hr style="border-color:#334;margin:4px 0">` +
-        `<span style="color:#ff9800">추정 생활인구</span>: ${Math.round(cell.pop)}명<br>` +
-        `주간: ${Math.round(cell.pop_day)} | 저녁: ${Math.round(cell.pop_eve)} | 야간: ${Math.round(cell.pop_night)}<br>` +
-        `피크 시간: ${cell.peak_hour}시`
-      : '';
-    m.bindPopup(
-      `<div style="font-family:'Noto Sans KR',sans-serif;font-size:12px;">` +
-      `<b>${cell.dong}</b> (${cell.gu})<br>` +
-      `종합: <b style="color:${scoreToColor(sc)}">${sc.toFixed(3)}</b><br>` +
-      `공역: ${cell.sa} | 장애물: ${cell.so}<br>` +
-      `소음: ${cell.sn} | 지형: ${cell.st} | 기상: ${cell.sw}<br>` +
-      `긴급도: ${cell.urg} | 수요지수: ${cell.ddi}` +
-      `${storeSection}${popSection}</div>`
-    );
-    m.addTo(map);
-    hexMarkers.push(m);
   });
-  document.getElementById('kpi-avg-cs').textContent = (total / n).toFixed(3);
+  return { type: 'FeatureCollection', features };
 }
 
-// ── Dynamic hub markers ───────────────────────────────────────
-let hubMarkers = [], servicePolys = [], routeLines = [];
+function renderH3Layer(scores) {
+  if (!map._loaded) return;
+  if (h3VisMode === 'none') {
+    map.setLayoutProperty('h3-cells', 'visibility', 'none');
+    return;
+  }
+  map.setLayoutProperty('h3-cells', 'visibility', 'visible');
+  const filterSet = h3VisMode === 'hub' ? lastHubCoveredSet : null;
+  map.getSource('h3-source').setData(buildH3GeoJSON(scores, filterSet));
 
-// Vivid neon palette — distinct from the green/yellow/orange hex-cell heatmap
-// and from the POI layer colours (green, orange, red, blue, yellow)
+  // Update color expression based on colorMode
+  let colorExpr;
+  if (colorMode === 'score') {
+    colorExpr = ['case',
+      ['<=', ['get', 'score'], 0],    '#e94560',
+      ['<',  ['get', 'score'], 0.2],  '#ff5722',
+      ['<',  ['get', 'score'], 0.4],  '#ff9800',
+      ['<',  ['get', 'score'], 0.6],  '#ffeb3b',
+      ['<',  ['get', 'score'], 0.75], '#8bc34a',
+      ['<',  ['get', 'score'], 0.9],  '#4caf50',
+      '#00c853'
+    ];
+  } else {
+    const field = colorMode === 'food' ? 'c_food' :
+                  colorMode === 'pop' ? 'pop_idx' :
+                  colorMode === 'pop_day' ? 'pop_day_idx' :
+                  colorMode === 'pop_eve' ? 'pop_eve_idx' : 'pop_night_idx';
+    // Normalize food by max value; pop fields are already 0-1 indices
+    if (colorMode === 'food') {
+      const maxFood = Math.max(...GRID.map(c => c.c_food || 0)) || 1;
+      colorExpr = ['interpolate', ['linear'],
+        ['/', ['get', field], maxFood],
+        0, '#1a1a2e', 0.3, '#0d47a1', 0.7, '#1565c0', 1, '#ffeb3b'
+      ];
+    } else {
+      colorExpr = ['interpolate', ['linear'], ['get', field],
+        0, '#1a1a2e', 0.3, '#e65100', 0.7, '#ff9800', 1, '#ffeb3b'
+      ];
+    }
+  }
+  map.setPaintProperty('h3-cells', 'circle-color', colorExpr);
+}
+
+// ── Hub + service layers (all GeoJSON — geographically anchored) ─
 const PALETTE = [
-  '#00e5ff',  // electric cyan
-  '#ff4081',  // vivid rose/pink
-  '#b2ff59',  // neon lime
-  '#ffd740',  // vivid amber / gold
-  '#ea80fc',  // vivid orchid / purple
-  '#ff6d00',  // deep orange (brighter than POI orange)
-  '#40c4ff',  // sky blue
-  '#f50057',  // hot pink
-  '#69ff47',  // bright green (different hue from score green)
-  '#ffab40',  // warm amber
+  '#00e5ff', '#ff4081', '#b2ff59', '#ffd740', '#ea80fc',
+  '#ff6d00', '#40c4ff', '#f50057', '#69ff47', '#ffab40',
 ];
 
+// Generate a GeoJSON polygon approximating a circle of radiusM metres
+function makeCirclePolygon(lat, lon, radiusM, color, rank) {
+  const n = 64;
+  const mPerDegLat = 111320;
+  const mPerDegLon = 111320 * Math.cos(lat * Math.PI / 180);
+  const coords = [];
+  for (let i = 0; i <= n; i++) {
+    const a = (2 * Math.PI * i) / n;
+    coords.push([lon + radiusM * Math.sin(a) / mPerDegLon,
+                 lat + radiusM * Math.cos(a) / mPerDegLat]);
+  }
+  return { type: 'Feature',
+    properties: { color, rank },
+    geometry: { type: 'Polygon', coordinates: [coords] } };
+}
+
 function buildHubLayer(selFacIndices, scores) {
-  hubMarkers.forEach(m => map.removeLayer(m));
-  servicePolys.forEach(p => map.removeLayer(p));
-  routeLines.forEach(l => map.removeLayer(l));
-  hubMarkers = []; servicePolys = []; routeLines = [];
+  // Rebuild covered-cell set used by renderH3Layer 'hub' mode
+  lastHubCoveredSet = new Set();
+  selFacIndices.forEach(fi => COV[fi].forEach(ci => lastHubCoveredSet.add(ci)));
+
+  const hubFeatures     = [];
+  const serviceFeatures = [];
+  const routeFeatures   = [];
+  const targetFeatures  = [];
 
   selFacIndices.forEach((fi, rank) => {
-    const fac = FACS[fi];
-    const color = PALETTE[rank % PALETTE.length];
-
-    // Hub marker — pin with pulsing glow ring
-    const icon = L.divIcon({
-      className: '',
-      html: `<div style="position:relative;width:44px;height:44px;">
-               <div style="position:absolute;inset:0;border-radius:50%;
-                 border:3px solid ${color};opacity:.45;
-                 animation:hubPulse 1.8s ease-in-out infinite;"></div>
-               <div style="position:absolute;inset:6px;border-radius:50%;
-                 background:radial-gradient(circle,${color} 30%,${color}cc 100%);
-                 border:2.5px solid #fff;display:flex;align-items:center;
-                 justify-content:center;font-size:16px;color:#fff;
-                 box-shadow:0 0 22px ${color},0 0 8px #fff6;">🚁</div>
-             </div>`,
-      iconSize: [44,44], iconAnchor: [22,22], popupAnchor: [0,-24]
-    });
-    const cov = COV[fi].filter(ci => scores[ci] > 0).length;
+    const fac    = FACS[fi];
+    const color  = PALETTE[rank % PALETTE.length];
+    const cov    = COV[fi].filter(ci => scores[ci] > 0).length;
     const hotCov = COV[fi].filter(ci => scores[ci] > 0 && GRID[ci].urgv >= URG_THR).length;
-    // ★ Fix: capture return value of .addTo() directly (avoids brittle _layers lookup)
-    const marker = L.marker([fac.lat, fac.lon], {icon})
-      .bindPopup(
-        `<div style="font-family:'Noto Sans KR';font-size:12px;">` +
-        `<b style="font-size:14px;color:${color};">#${rank+1} ${fac.name}</b><br>` +
-        `시설: ${fac.facility} | 수용: ${fac.capacity}대<br>` +
-        `적합셀 커버: <b>${cov}</b>셀 | 핫스팟: <b>${hotCov}</b>셀</div>`
-      )
-      .addTo(map);
-    hubMarkers.push(marker);
 
-    // Service circle (500m radius)
-    const circle = L.circle([fac.lat, fac.lon], {
-      radius: 500,
-      color: color, weight: 2.5,
-      fillColor: color, fillOpacity: 0.10,
-      dashArray: '10,5',
-      opacity: 0.85,
-    }).addTo(map);
-    servicePolys.push(circle);
+    // Hub point feature (rendered as circle + emoji symbol layer — no HTML markers)
+    hubFeatures.push({
+      type: 'Feature',
+      properties: { color, rank, name: fac.name, facility: fac.facility, capacity: fac.capacity, cov, hotCov },
+      geometry: { type: 'Point', coordinates: [fac.lon, fac.lat] }
+    });
 
-    // Routes: lines from hub to nearest cells with highest scores
+    // Service circle polygon (500 m)
+    serviceFeatures.push(makeCirclePolygon(fac.lat, fac.lon, 500, color, rank));
+
+    // Route lines + explicit target point markers (top-5 urgent cells)
     const topCells = COV[fi]
       .filter(ci => scores[ci] > 0 && GRID[ci].urgv >= URG_THR)
-      .sort((a, b) => scores[b] + GRID[b].urgv - scores[a] - GRID[a].urgv)
+      .sort((a, b) => (scores[b] + GRID[b].urgv) - (scores[a] + GRID[a].urgv))
       .slice(0, 5);
     topCells.forEach(ci => {
-      const cell = GRID[ci];
-      const line = L.polyline([[fac.lat, fac.lon], [cell.lat, cell.lon]], {
-        color, weight: 2, opacity: 0.55, dashArray: '8,5'
-      }).addTo(map);
-      routeLines.push(line);
+      routeFeatures.push({
+        type: 'Feature',
+        properties: { color, rank },
+        geometry: { type: 'LineString',
+          coordinates: [[fac.lon, fac.lat], [GRID[ci].lon, GRID[ci].lat]] }
+      });
+      targetFeatures.push({
+        type: 'Feature',
+        properties: {
+          color, rank,
+          dong: GRID[ci].dong, gu: GRID[ci].gu, h3: GRID[ci].h3,
+          score: scores[ci], urg: GRID[ci].urg, urgv: GRID[ci].urgv, ddi: GRID[ci].ddi
+        },
+        geometry: { type: 'Point', coordinates: [GRID[ci].lon, GRID[ci].lat] }
+      });
     });
   });
+
+  if (map._loaded) {
+    map.getSource('hubs').setData({ type: 'FeatureCollection', features: hubFeatures });
+    map.getSource('service-circles').setData({ type: 'FeatureCollection', features: serviceFeatures });
+    map.getSource('route-lines').setData({ type: 'FeatureCollection', features: routeFeatures });
+    map.getSource('target-points').setData({ type: 'FeatureCollection', features: targetFeatures });
+  }
 }
 
 // ── Render hub list panel ─────────────────────────────────────
@@ -668,13 +737,16 @@ function renderHubList(selFacIndices, scores, hotspots) {
 // Master update function — runs on every layer toggle
 // ═══════════════════════════════════════════════════════════════
 function updateDashboard() {
+  if (!map._loaded) return;
   const active = getActiveLayers();
 
   // 1. Recompute all cell scores
   const scores = GRID.map(cell => recalcScore(cell, active));
 
-  // 2. Update hex map
-  buildHexLayer(scores);
+  // 2. Avg composite KPI — computed directly from scores, independent of H3 rendering
+  const avgCs = scores.reduce((s, v) => s + v, 0) / scores.length;
+  document.getElementById('kpi-avg-cs').textContent = avgCs.toFixed(3);
+  window._lastScores = scores;
 
   // 3. Run greedy set-cover
   const result = selectHubs(scores);
@@ -683,25 +755,272 @@ function updateDashboard() {
   const hotspots = result.hotspots;
   const uncovered = result.uncovered;
 
-  // 4. Rebuild hub map layer
+  // 4. Hub layer first — populates lastHubCoveredSet used by renderH3Layer
   buildHubLayer(selFacIndices, scores);
 
-  // 5. Update hub list panel
+  // 5. H3 layer after — uses lastHubCoveredSet for 'hub' mode
+  renderH3Layer(scores);
+
+  // 6. Update hub list panel
   renderHubList(selFacIndices, scores, hotspots);
 
-  // 6. Update KPIs
+  // 7. Update KPIs
   document.getElementById('kpi-feasible').textContent = feasible.size.toLocaleString();
   document.getElementById('kpi-num-hubs').textContent = selFacIndices.length;
   const coveredHots = hotspots.size - (uncovered ? uncovered.size : 0);
   const covPct = hotspots.size > 0 ? (coveredHots / hotspots.size * 100).toFixed(1) : '0.0';
   document.getElementById('kpi-coverage').textContent = covPct + '%';
 
-  // 7. Update formula display
+  // 8. Update formula display
   const names = {sa:'공역',so:'장애물',sn:'소음',st:'지형',sw:'기상'};
   const parts = Object.entries(active).filter(([,v])=>v).map(([k])=>names[k]);
   document.getElementById('formula-display').textContent =
     parts.length ? parts.join(' × ') : '(선택 없음 — 모든 셀 점수 0)';
 }
+
+// ═══════════════════════════════════════════════════════════════
+// map.on('load') — create all GeoJSON sources + layers, then initial render
+// ═══════════════════════════════════════════════════════════════
+map.on('load', () => {
+  map._loaded = true;
+
+  // ── H3 source + circle layer ──────────────────────────────
+  map.addSource('h3-source', { type:'geojson', data:{ type:'FeatureCollection', features:[] } });
+  map.addLayer({
+    id: 'h3-cells', type: 'circle', source: 'h3-source',
+    paint: {
+      'circle-radius': 5,
+      'circle-color': '#4caf50',
+      'circle-opacity': 0.7,
+    },
+    layout: { visibility: 'visible' }
+  });
+
+  // Click popup on H3 cells
+  map.on('click', 'h3-cells', e => {
+    const p = e.features[0].properties;
+    const sc = p.score || 0;
+    const storeSection = p.c_food > 0
+      ? `<hr style="border-color:#334;margin:4px 0"><span style="color:#4fc3f7">음식 상권</span>: ${p.c_food}개` : '';
+    const popSection = p.pop > 0
+      ? `<hr style="border-color:#334;margin:4px 0"><span style="color:#ff9800">추정 생활인구</span>: ${Math.round(p.pop)}명<br>주간: ${Math.round(p.pop_day)} | 저녁: ${Math.round(p.pop_eve)} | 야간: ${Math.round(p.pop_night)}<br>피크: ${p.peak_hour}시` : '';
+    new maplibregl.Popup()
+      .setLngLat(e.lngLat)
+      .setHTML(
+        `<div style="font-family:'Noto Sans KR';font-size:12px;">` +
+        `<b>${p.dong}</b> (${p.gu})<br>` +
+        `종합: <b>${sc.toFixed(3)}</b><br>` +
+        `공역: ${p.sa} | 장애물: ${p.so}<br>` +
+        `소음: ${p.sn} | 지형: ${p.st} | 기상: ${p.sw}<br>` +
+        `긴급도: ${p.urg} | 수요지수: ${p.ddi}${storeSection}${popSection}</div>`
+      ).addTo(map);
+  });
+  map.on('mouseenter', 'h3-cells', () => map.getCanvas().style.cursor = 'pointer');
+  map.on('mouseleave', 'h3-cells', () => map.getCanvas().style.cursor = '');
+
+  // ── Service circles ───────────────────────────────────────
+  map.addSource('service-circles', { type:'geojson', data:{ type:'FeatureCollection', features:[] } });
+  map.addLayer({
+    id: 'service-circles-fill', type: 'fill', source: 'service-circles',
+    paint: { 'fill-color': ['get', 'color'], 'fill-opacity': 0.07 }
+  });
+  map.addLayer({
+    id: 'service-circles-outline', type: 'line', source: 'service-circles',
+    paint: { 'line-color': ['get', 'color'], 'line-width': 2, 'line-opacity': 0.8, 'line-dasharray': [3, 2] }
+  });
+
+  // ── Route lines ───────────────────────────────────────────
+  map.addSource('route-lines', { type:'geojson', data:{ type:'FeatureCollection', features:[] } });
+  map.addLayer({
+    id: 'route-lines-layer', type: 'line', source: 'route-lines',
+    paint: { 'line-color': ['get', 'color'], 'line-width': 2, 'line-opacity': 0.55, 'line-dasharray': [4, 3] }
+  });
+
+  // ── Target points ─────────────────────────────────────────
+  map.addSource('target-points', { type:'geojson', data:{ type:'FeatureCollection', features:[] } });
+  map.addLayer({
+    id: 'target-points-layer', type: 'circle', source: 'target-points',
+    paint: {
+      'circle-radius': 6,
+      'circle-color': ['get', 'color'],
+      'circle-opacity': 0.9,
+      'circle-stroke-width': 1.5,
+      'circle-stroke-color': '#ffffff',
+    }
+  });
+  map.on('click', 'target-points-layer', e => {
+    const p = e.features[0].properties;
+    new maplibregl.Popup()
+      .setLngLat(e.lngLat)
+      .setHTML(
+        `<div style="font-family:'Noto Sans KR';font-size:12px;">` +
+        `<b>${p.dong}</b> (${p.gu})<br>` +
+        `H3: <code style="font-size:10px">${p.h3}</code><br>` +
+        `종합: <b>${parseFloat(p.score).toFixed(3)}</b><br>` +
+        `긴급도: ${p.urg} | 수요지수: ${p.ddi}</div>`
+      ).addTo(map);
+  });
+  map.on('mouseenter', 'target-points-layer', () => map.getCanvas().style.cursor = 'pointer');
+  map.on('mouseleave', 'target-points-layer', () => map.getCanvas().style.cursor = '');
+
+  // ── Hub GeoJSON layers (circle + emoji — geographically anchored) ──
+  // Using GeoJSON layers instead of HTML markers so hubs are rendered in
+  // the same WebGL projection pass as tiles — eliminates pitch/zoom drift.
+  map.addSource('hubs', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+
+  // Glow ring (opacity + radius animated via setInterval below)
+  map.addLayer({
+    id: 'hub-glow', type: 'circle', source: 'hubs',
+    paint: {
+      'circle-radius': 20,
+      'circle-color': ['get', 'color'],
+      'circle-opacity': 0.0,
+      'circle-stroke-width': 3,
+      'circle-stroke-color': ['get', 'color'],
+      'circle-stroke-opacity': 0.4,
+      'circle-pitch-alignment': 'map',
+    }
+  });
+
+  // Solid hub dot
+  map.addLayer({
+    id: 'hub-circle', type: 'circle', source: 'hubs',
+    paint: {
+      'circle-radius': 13,
+      'circle-color': ['get', 'color'],
+      'circle-opacity': 1.0,
+      'circle-stroke-width': 2.5,
+      'circle-stroke-color': '#ffffff',
+      'circle-stroke-opacity': 0.95,
+      'circle-pitch-alignment': 'map',
+    }
+  });
+
+  // Helicopter emoji symbol on top
+  map.addLayer({
+    id: 'hub-labels', type: 'symbol', source: 'hubs',
+    layout: {
+      'text-field': '🚁',
+      'text-size': 13,
+      'text-anchor': 'center',
+      'text-allow-overlap': true,
+      'text-ignore-placement': true,
+      'text-pitch-alignment': 'map',
+    },
+    paint: { 'text-color': '#ffffff' }
+  });
+
+  // Hub click popup
+  map.on('click', 'hub-circle', e => {
+    const p = e.features[0].properties;
+    new maplibregl.Popup({ offset: 18, maxWidth: '220px' })
+      .setLngLat(e.lngLat)
+      .setHTML(
+        `<div style="font-family:'Noto Sans KR';font-size:12px;">` +
+        `<b style="font-size:13px;color:${p.color};">#${p.rank+1} ${p.name}</b><br>` +
+        `시설: ${p.facility}<br>수용: ${p.capacity}대<br>` +
+        `적합셀: <b>${p.cov}</b> | 핫스팟: <b>${p.hotCov}</b></div>`
+      ).addTo(map);
+  });
+  map.on('mouseenter', 'hub-circle', () => map.getCanvas().style.cursor = 'pointer');
+  map.on('mouseleave', 'hub-circle', () => map.getCanvas().style.cursor = '');
+
+  // ── POI sources + layers ──────────────────────────────────
+  Object.entries(POI_CONFIG).forEach(([cat, cfg]) => {
+    const features = (POI[cat] || []).map(p => ({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [p.lon, p.lat] },
+      properties: { name: p.name || '' }
+    }));
+    map.addSource(`poi-${cat}`, { type:'geojson', data:{ type:'FeatureCollection', features } });
+    map.addLayer({
+      id: `poi-${cat}`, type: 'circle', source: `poi-${cat}`,
+      paint: {
+        'circle-radius': cfg.radius,
+        'circle-color': cfg.color,
+        'circle-opacity': 0.85,
+        'circle-stroke-width': 1,
+        'circle-stroke-color': cfg.color,
+      },
+      layout: { visibility: 'none' }
+    });
+    map.on('click', `poi-${cat}`, e => {
+      const name = e.features[0].properties.name;
+      new maplibregl.Popup()
+        .setLngLat(e.lngLat)
+        .setHTML(`<div style="font-family:'Noto Sans KR';font-size:12px;">${cfg.emoji} ${name || cat}</div>`)
+        .addTo(map);
+    });
+  });
+
+  // ── 3D Buildings ──────────────────────────────────────────
+  map.addSource('buildings-3d', {
+    type: 'geojson',
+    data: { type: 'FeatureCollection', features: [] },
+  });
+  map.addLayer({
+    id: 'buildings-3d-layer',
+    type: 'fill-extrusion',
+    source: 'buildings-3d',
+    minzoom: 12,
+    paint: {
+      'fill-extrusion-color': [
+        'interpolate', ['linear'], ['get', 'height_m'],
+         0,  '#1a2a3a',
+        30,  '#1e3a5f',
+        80,  '#1e4976',
+        150, '#1a5276',
+        300, '#145374',
+      ],
+      'fill-extrusion-height':   ['get', 'height_m'],
+      'fill-extrusion-base':     0,
+      'fill-extrusion-opacity':  0.75,
+      'fill-extrusion-vertical-gradient': true,
+    },
+  });
+  fetch('./tableau_data/seoul_buildings_3d.geojson')
+    .then(r => r.json())
+    .then(data => {
+      map.getSource('buildings-3d').setData(data);
+      console.log('3D buildings loaded:', data.features.length, 'features');
+    })
+    .catch(err => console.warn('Buildings load failed (need http server):', err));
+
+  // ── Terrain (Terrarium tiles, free, no API key) ───────────
+  map.addSource('terrain-dem', {
+    type: 'raster-dem',
+    tiles: ['https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png'],
+    encoding: 'terrarium',
+    tileSize: 256,
+    maxzoom: 15,
+    attribution: 'Terrain &copy; <a href="https://registry.opendata.aws/terrain-tiles/">Mapzen/AWS</a>',
+  });
+  map.setTerrain({ source: 'terrain-dem', exaggeration: 1.5 });
+  map.addLayer({
+    id: 'hillshade', type: 'hillshade', source: 'terrain-dem',
+    paint: {
+      'hillshade-exaggeration': 0.5,
+      'hillshade-shadow-color': '#0a0a1a',
+      'hillshade-highlight-color': '#1e3a5f',
+      'hillshade-accent-color': '#0f2a4a',
+      'hillshade-illumination-anchor': 'map',
+    },
+  }, 'h3-cells');   // insert below h3 cells so mountains don't cover data
+
+  // ── Initial dashboard render ──────────────────────────────
+  updateDashboard();
+});
+
+// ── Hub glow animation (~15 fps — no per-frame setPaintProperty overhead) ──
+let _glowT = 0;
+setInterval(() => {
+  _glowT += 0.12;
+  const t = (Math.sin(_glowT) + 1) / 2;   // 0 → 1 oscillation
+  if (map._loaded && map.getLayer('hub-glow')) {
+    map.setPaintProperty('hub-glow', 'circle-stroke-opacity', 0.12 + 0.38 * t);
+    map.setPaintProperty('hub-glow', 'circle-radius', 16 + 8 * t);
+  }
+}, 67);  // ~15 fps
 
 // ── Layer toggle events ───────────────────────────────────────
 document.querySelectorAll('.layer-toggle').forEach(label => {
@@ -716,14 +1035,11 @@ document.querySelectorAll('.layer-toggle').forEach(label => {
   });
 });
 
-// Color mode selector
+// Color mode selector — only re-draws H3 layer, doesn't rerun hub selection
 document.getElementById('color-mode-select').addEventListener('change', function() {
   colorMode = this.value;
-  updateDashboard();
+  if (window._lastScores) renderH3Layer(window._lastScores);
 });
-
-// Initial render
-updateDashboard();
 
 // ═══════════════════════════════════════════════════════════════
 // Static charts (Plotly)
