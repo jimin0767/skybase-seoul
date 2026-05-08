@@ -170,6 +170,7 @@ select option { background:#0f1928; color:#e0e0e0; }
   <div class="main-grid">
     <div class="map-panel">
       <div id="map"></div>
+      <div id="bldg-status" style="position:absolute;bottom:32px;left:10px;background:rgba(10,10,26,0.82);color:#7ebfe8;padding:4px 10px;border-radius:6px;font-size:11px;font-family:'Noto Sans KR',sans-serif;z-index:10;pointer-events:none;border:1px solid #0f3460;"></div>
     </div>
     <div class="side-panel">
       <!-- Layer Toggles -->
@@ -784,7 +785,27 @@ function updateDashboard() {
 map.on('load', () => {
   map._loaded = true;
 
-  // ── H3 source + circle layer ──────────────────────────────
+  // ── 1. Hide CARTO flat 2D building fills ─────────────────────
+  // CARTO dark-matter has 'building' and 'building-top' flat fill layers.
+  // They show as gray rectangles and visually mask the 3D extrusion layer below.
+  ['building', 'building-top'].forEach(id => {
+    if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', 'none');
+  });
+
+  // ── 2. Terrain (set FIRST — must precede any fill-extrusion layer) ────
+  // setTerrain() reconfigures the 3D rendering pipeline; fill-extrusion
+  // layers added afterwards sit correctly on the terrain surface.
+  map.addSource('terrain-dem', {
+    type: 'raster-dem',
+    tiles: ['https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png'],
+    encoding: 'terrarium',
+    tileSize: 256,
+    maxzoom: 15,
+    attribution: 'Terrain &copy; <a href="https://registry.opendata.aws/terrain-tiles/">Mapzen/AWS</a>',
+  });
+  map.setTerrain({ source: 'terrain-dem', exaggeration: 1.0 });
+
+  // ── 3. H3 source + circle layer (anchor for beforeId ordering) ──
   map.addSource('h3-source', { type:'geojson', data:{ type:'FeatureCollection', features:[] } });
   map.addLayer({
     id: 'h3-cells', type: 'circle', source: 'h3-source',
@@ -817,6 +838,121 @@ map.on('load', () => {
   });
   map.on('mouseenter', 'h3-cells', () => map.getCanvas().style.cursor = 'pointer');
   map.on('mouseleave', 'h3-cells', () => map.getCanvas().style.cursor = '');
+
+  // ── 4. Hillshade + building layers (all use beforeId:'h3-cells') ──
+  // Layer stack from bottom to top: hillshade → CARTO-fallback-3d → custom-3d → debug-cube → h3-cells → data overlays
+  // Each addLayer(x, 'h3-cells') inserts x immediately below h3-cells;
+  // since they are added in order, the last one ends up closest to h3-cells.
+
+  map.addLayer({
+    id: 'hillshade', type: 'hillshade', source: 'terrain-dem',
+    paint: {
+      'hillshade-exaggeration': 0.5,
+      'hillshade-shadow-color': '#0a0a1a',
+      'hillshade-highlight-color': '#1e3a5f',
+      'hillshade-accent-color': '#0f2a4a',
+      'hillshade-illumination-anchor': 'map',
+    },
+  }, 'h3-cells');
+
+  // Fallback: CARTO vector tile buildings (no file load required, always visible).
+  // Seoul OSM has no height attrs → fixed 20 m default so blocks appear immediately.
+  // Replaced by custom GeoJSON layer when that finishes loading.
+  map.addLayer({
+    id: 'buildings-carto-3d',
+    type: 'fill-extrusion',
+    source: 'carto',
+    'source-layer': 'building',
+    minzoom: 10.5,
+    paint: {
+      'fill-extrusion-color': '#3a6ea8',
+      'fill-extrusion-height': 20,
+      'fill-extrusion-base': 0,
+      'fill-extrusion-opacity': 0.75,
+      'fill-extrusion-vertical-gradient': false,
+    },
+  }, 'h3-cells');
+
+  // Primary: custom GeoJSON with real heights (2.5× exaggeration for readability).
+  // Starts hidden; set visible + hide fallback when fetch completes.
+  map.addSource('buildings-3d', {
+    type: 'geojson',
+    data: { type: 'FeatureCollection', features: [] },
+  });
+  map.addLayer({
+    id: 'buildings-3d-layer',
+    type: 'fill-extrusion',
+    source: 'buildings-3d',
+    minzoom: 10.5,
+    paint: {
+      'fill-extrusion-color': [
+        'interpolate', ['linear'], ['get', 'height_m'],
+         15, '#2e6da4',
+         30, '#3d85c8',
+         60, '#5ba3d9',
+        120, '#7ebfe8',
+        200, '#a8d8f2',
+        300, '#cceeff',
+      ],
+      // 2.5× exaggeration so buildings read clearly in the tilted 3D view
+      'fill-extrusion-height': ['*', ['to-number', ['get', 'height_m'], 0], 2.5],
+      'fill-extrusion-base': 0,
+      'fill-extrusion-opacity': 0.92,
+      'fill-extrusion-vertical-gradient': false,
+    },
+    layout: { visibility: 'none' },
+  }, 'h3-cells');
+
+  // DEBUG cube — bright magenta pillar (250 m) near Seoul City Hall.
+  // Verify fill-extrusion renders at all; remove once confirmed.
+  map.addSource('debug-cube', {
+    type: 'geojson',
+    data: {
+      type: 'FeatureCollection',
+      features: [{
+        type: 'Feature',
+        properties: { h: 250 },
+        geometry: {
+          type: 'Polygon',
+          coordinates: [[[126.9775, 37.5666], [126.9788, 37.5666],
+                          [126.9788, 37.5676], [126.9775, 37.5676],
+                          [126.9775, 37.5666]]]
+        }
+      }]
+    }
+  });
+  map.addLayer({
+    id: 'debug-cube-layer',
+    type: 'fill-extrusion',
+    source: 'debug-cube',
+    paint: {
+      'fill-extrusion-color': '#ff0077',
+      'fill-extrusion-height': ['get', 'h'],
+      'fill-extrusion-base': 0,
+      'fill-extrusion-opacity': 0.95,
+      'fill-extrusion-vertical-gradient': false,
+    },
+  }, 'h3-cells');
+
+  // ── 5. Fetch custom GeoJSON with visible status ───────────────
+  const _bldgStatus = document.getElementById('bldg-status');
+  _bldgStatus.textContent = '🏢 3D 빌딩: 로딩 중…';
+  fetch('./tableau_data/seoul_buildings_3d.geojson')
+    .then(r => {
+      if (!r.ok) throw new Error(`HTTP ${r.status} ${r.statusText}`);
+      return r.json();
+    })
+    .then(data => {
+      map.getSource('buildings-3d').setData(data);
+      map.setLayoutProperty('buildings-3d-layer', 'visibility', 'visible');
+      map.setLayoutProperty('buildings-carto-3d', 'visibility', 'none');
+      _bldgStatus.textContent = `🏢 3D 빌딩: ${data.features.length.toLocaleString()}개 로드됨`;
+      console.log('3D buildings loaded:', data.features.length, 'features');
+    })
+    .catch(err => {
+      _bldgStatus.textContent = `⚠️ 빌딩 로드 실패 (CARTO 폴백 사용 중): ${err.message}`;
+      console.warn('Buildings GeoJSON load failed, using CARTO fallback:', err);
+    });
 
   // ── Service circles ───────────────────────────────────────
   map.addSource('service-circles', { type:'geojson', data:{ type:'FeatureCollection', features:[] } });
@@ -952,68 +1088,6 @@ map.on('load', () => {
         .addTo(map);
     });
   });
-
-  // ── 3D Buildings ──────────────────────────────────────────
-  map.addSource('buildings-3d', {
-    type: 'geojson',
-    data: { type: 'FeatureCollection', features: [] },
-  });
-  map.addLayer({
-    id: 'buildings-3d-layer',
-    type: 'fill-extrusion',
-    source: 'buildings-3d',
-    minzoom: 12,
-    paint: {
-      // Distinct blue-gray palette that contrasts against the dark basemap.
-      // Lighter shades for taller buildings so height reads clearly.
-      'fill-extrusion-color': [
-        'interpolate', ['linear'], ['get', 'height_m'],
-         15, '#2e6da4',
-         30, '#3d85c8',
-         60, '#5ba3d9',
-        120, '#7ebfe8',
-        200, '#a8d8f2',
-        300, '#cceeff',
-      ],
-      'fill-extrusion-height':  ['get', 'height_m'],
-      'fill-extrusion-base':    0,
-      'fill-extrusion-opacity': 0.92,
-      // Disable gradient: prevents wall faces from getting terrain-like slope shading
-      // that makes adjacent buildings blur into a hill surface.
-      'fill-extrusion-vertical-gradient': false,
-    },
-  });
-  fetch('./tableau_data/seoul_buildings_3d.geojson')
-    .then(r => r.json())
-    .then(data => {
-      map.getSource('buildings-3d').setData(data);
-      console.log('3D buildings loaded:', data.features.length, 'features');
-    })
-    .catch(err => console.warn('Buildings load failed (need http server):', err));
-
-  // ── Terrain (3D mountains + hillshade) ───────────────────────
-  // exaggeration: 1.0 = real-world scale; keeps flat-area building bases stable.
-  // Buildings on hillsides may show slight base warp — acceptable since Seoul's
-  // dense urban grid sits on flat ground; mountain slopes have no buildings.
-  map.addSource('terrain-dem', {
-    type: 'raster-dem',
-    tiles: ['https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png'],
-    encoding: 'terrarium',
-    tileSize: 256,
-    maxzoom: 15,
-    attribution: 'Terrain &copy; <a href="https://registry.opendata.aws/terrain-tiles/">Mapzen/AWS</a>',
-  });
-  map.setTerrain({ source: 'terrain-dem', exaggeration: 1.0 });
-  map.addLayer({
-    id: 'hillshade', type: 'hillshade', source: 'terrain-dem',
-    paint: {
-      'hillshade-exaggeration': 0.5,
-      'hillshade-shadow-color': '#0a0a1a',
-      'hillshade-highlight-color': '#1e3a5f',
-      'hillshade-accent-color': '#0f2a4a',
-      'hillshade-illumination-anchor': 'map',
-    },
-  }, 'h3-cells');
 
   // ── Initial dashboard render ──────────────────────────────
   updateDashboard();
