@@ -833,9 +833,19 @@ const map = new maplibregl.Map({{
 }});
 map.addControl(new maplibregl.NavigationControl(), 'top-right');
 
-// Right-click drag → pitch control
-// Drag upward (−dy) = increase pitch (buildings more side-on)
-// Drag downward (+dy) = decrease pitch (more top-down)
+// ── Pitch controls ────────────────────────────────────────────
+// Two-finger touchpad swipe → pitch (disable default scroll-zoom)
+// Swipe up (−deltaY) = increase pitch (more side-on)
+// Swipe down (+deltaY) = decrease pitch (more top-down)
+map.scrollZoom.disable();
+map.getCanvas().addEventListener('wheel', e => {{
+  e.preventDefault();
+  const newPitch = Math.max(0, Math.min(75, map.getPitch() - e.deltaY * 0.15));
+  map.setPitch(newPitch);
+}}, {{ passive: false }});
+
+// Right-click drag → also controls pitch (for mouse users)
+// Drag upward (−dy) = increase pitch; drag downward (+dy) = decrease pitch
 map.dragRotate.disable();
 let _rcDrag = null;
 map.getCanvas().addEventListener('mousedown', e => {{
@@ -846,7 +856,7 @@ map.getCanvas().addEventListener('mousedown', e => {{
 window.addEventListener('mousemove', e => {{
   if (!_rcDrag) return;
   const dy = e.clientY - _rcDrag.y;
-  map.setPitch(Math.max(0, Math.min(85, _rcDrag.pitch - dy * 0.35)));
+  map.setPitch(Math.max(0, Math.min(75, _rcDrag.pitch - dy * 0.35)));
 }});
 window.addEventListener('mouseup', e => {{ if (e.button === 2) _rcDrag = null; }});
 map.getCanvas().addEventListener('contextmenu', e => e.preventDefault());
@@ -943,9 +953,7 @@ function renderH3Layer(scores) {{
   map.setPaintProperty('h3-cells', 'circle-color', colorExpr);
 }}
 
-// ── Dynamic hub markers (MapLibre) ───────────────────────────
-let hubMarkers = [];
-
+// ── Hub + service layers (all GeoJSON — geographically anchored) ─
 const PALETTE = [
   '#00e5ff', '#ff4081', '#b2ff59', '#ffd740', '#ea80fc',
   '#ff6d00', '#40c4ff', '#f50057', '#69ff47', '#ffab40',
@@ -968,47 +976,27 @@ function makeCirclePolygon(lat, lon, radiusM, color, rank) {{
 }}
 
 function buildHubLayer(selFacIndices, scores) {{
-  // Remove old hub HTML markers
-  hubMarkers.forEach(m => m.remove());
-  hubMarkers = [];
-
   // Rebuild covered-cell set used by renderH3Layer 'hub' mode
   lastHubCoveredSet = new Set();
   selFacIndices.forEach(fi => COV[fi].forEach(ci => lastHubCoveredSet.add(ci)));
 
+  const hubFeatures     = [];
   const serviceFeatures = [];
   const routeFeatures   = [];
   const targetFeatures  = [];
 
   selFacIndices.forEach((fi, rank) => {{
-    const fac   = FACS[fi];
-    const color = PALETTE[rank % PALETTE.length];
-
-    // Hub HTML marker
-    const el = document.createElement('div');
-    el.style.cssText = 'position:relative;width:44px;height:44px;cursor:pointer;';
-    el.innerHTML =
-      `<div style="position:absolute;inset:0;border-radius:50%;` +
-      `border:3px solid ${{color}};opacity:.45;` +
-      `animation:hubPulse 1.8s ease-in-out infinite;"></div>` +
-      `<div style="position:absolute;inset:6px;border-radius:50%;` +
-      `background:radial-gradient(circle,${{color}} 30%,${{color}}cc 100%);` +
-      `border:2.5px solid #fff;display:flex;align-items:center;` +
-      `justify-content:center;font-size:16px;box-shadow:0 0 22px ${{color}};">🚁</div>`;
-
+    const fac    = FACS[fi];
+    const color  = PALETTE[rank % PALETTE.length];
     const cov    = COV[fi].filter(ci => scores[ci] > 0).length;
     const hotCov = COV[fi].filter(ci => scores[ci] > 0 && GRID[ci].urgv >= URG_THR).length;
-    const popup  = new maplibregl.Popup({{ offset: 25, maxWidth:'220px' }}).setHTML(
-      `<div style="font-family:'Noto Sans KR';font-size:12px;">` +
-      `<b style="font-size:13px;color:${{color}};">#${{rank+1}} ${{fac.name}}</b><br>` +
-      `시설: ${{fac.facility}}<br>수용: ${{fac.capacity}}대<br>` +
-      `적합셀: <b>${{cov}}</b> | 핫스팟: <b>${{hotCov}}</b></div>`
-    );
-    const marker = new maplibregl.Marker({{ element: el, anchor: 'center' }})
-      .setLngLat([fac.lon, fac.lat])
-      .setPopup(popup)
-      .addTo(map);
-    hubMarkers.push(marker);
+
+    // Hub point feature (rendered as circle + emoji symbol layer — no HTML markers)
+    hubFeatures.push({{
+      type: 'Feature',
+      properties: {{ color, rank, name: fac.name, facility: fac.facility, capacity: fac.capacity, cov, hotCov }},
+      geometry: {{ type: 'Point', coordinates: [fac.lon, fac.lat] }}
+    }});
 
     // Service circle polygon (500 m)
     serviceFeatures.push(makeCirclePolygon(fac.lat, fac.lon, 500, color, rank));
@@ -1038,6 +1026,7 @@ function buildHubLayer(selFacIndices, scores) {{
   }});
 
   if (map._loaded) {{
+    map.getSource('hubs').setData({{ type: 'FeatureCollection', features: hubFeatures }});
     map.getSource('service-circles').setData({{ type: 'FeatureCollection', features: serviceFeatures }});
     map.getSource('route-lines').setData({{ type: 'FeatureCollection', features: routeFeatures }});
     map.getSource('target-points').setData({{ type: 'FeatureCollection', features: targetFeatures }});
@@ -1207,6 +1196,68 @@ map.on('load', () => {{
   map.on('mouseenter', 'target-points-layer', () => map.getCanvas().style.cursor = 'pointer');
   map.on('mouseleave', 'target-points-layer', () => map.getCanvas().style.cursor = '');
 
+  // ── Hub GeoJSON layers (circle + emoji — geographically anchored) ──
+  // Using GeoJSON layers instead of HTML markers so hubs are rendered in
+  // the same WebGL projection pass as tiles — eliminates pitch/zoom drift.
+  map.addSource('hubs', {{ type: 'geojson', data: {{ type: 'FeatureCollection', features: [] }} }});
+
+  // Glow ring (opacity + radius animated via setInterval below)
+  map.addLayer({{
+    id: 'hub-glow', type: 'circle', source: 'hubs',
+    paint: {{
+      'circle-radius': 20,
+      'circle-color': ['get', 'color'],
+      'circle-opacity': 0.0,
+      'circle-stroke-width': 3,
+      'circle-stroke-color': ['get', 'color'],
+      'circle-stroke-opacity': 0.4,
+      'circle-pitch-alignment': 'map',
+    }}
+  }});
+
+  // Solid hub dot
+  map.addLayer({{
+    id: 'hub-circle', type: 'circle', source: 'hubs',
+    paint: {{
+      'circle-radius': 13,
+      'circle-color': ['get', 'color'],
+      'circle-opacity': 1.0,
+      'circle-stroke-width': 2.5,
+      'circle-stroke-color': '#ffffff',
+      'circle-stroke-opacity': 0.95,
+      'circle-pitch-alignment': 'map',
+    }}
+  }});
+
+  // Helicopter emoji symbol on top
+  map.addLayer({{
+    id: 'hub-labels', type: 'symbol', source: 'hubs',
+    layout: {{
+      'text-field': '🚁',
+      'text-size': 13,
+      'text-anchor': 'center',
+      'text-allow-overlap': true,
+      'text-ignore-placement': true,
+      'text-pitch-alignment': 'map',
+    }},
+    paint: {{ 'text-color': '#ffffff' }}
+  }});
+
+  // Hub click popup
+  map.on('click', 'hub-circle', e => {{
+    const p = e.features[0].properties;
+    new maplibregl.Popup({{ offset: 18, maxWidth: '220px' }})
+      .setLngLat(e.lngLat)
+      .setHTML(
+        `<div style="font-family:'Noto Sans KR';font-size:12px;">` +
+        `<b style="font-size:13px;color:${{p.color}};">#${{p.rank+1}} ${{p.name}}</b><br>` +
+        `시설: ${{p.facility}}<br>수용: ${{p.capacity}}대<br>` +
+        `적합셀: <b>${{p.cov}}</b> | 핫스팟: <b>${{p.hotCov}}</b></div>`
+      ).addTo(map);
+  }});
+  map.on('mouseenter', 'hub-circle', () => map.getCanvas().style.cursor = 'pointer');
+  map.on('mouseleave', 'hub-circle', () => map.getCanvas().style.cursor = '');
+
   // ── POI sources + layers ──────────────────────────────────
   Object.entries(POI_CONFIG).forEach(([cat, cfg]) => {{
     const features = (POI[cat] || []).map(p => ({{
@@ -1292,6 +1343,17 @@ map.on('load', () => {{
   // ── Initial dashboard render ──────────────────────────────
   updateDashboard();
 }});
+
+// ── Hub glow animation (~15 fps — no per-frame setPaintProperty overhead) ──
+let _glowT = 0;
+setInterval(() => {{
+  _glowT += 0.12;
+  const t = (Math.sin(_glowT) + 1) / 2;   // 0 → 1 oscillation
+  if (map._loaded && map.getLayer('hub-glow')) {{
+    map.setPaintProperty('hub-glow', 'circle-stroke-opacity', 0.12 + 0.38 * t);
+    map.setPaintProperty('hub-glow', 'circle-radius', 16 + 8 * t);
+  }}
+}}, 67);  // ~15 fps
 
 // ── Layer toggle events ───────────────────────────────────────
 document.querySelectorAll('.layer-toggle').forEach(label => {{
