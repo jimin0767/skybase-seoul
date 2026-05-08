@@ -1173,7 +1173,7 @@ map.on('load', () => {{
   map.on('mouseleave', 'h3-cells', () => map.getCanvas().style.cursor = '');
 
   // ── 4. Hillshade + building layers (all use beforeId:'h3-cells') ──
-  // Layer stack from bottom to top: hillshade → CARTO-fallback-3d → custom-3d → debug-cube → h3-cells → data overlays
+  // Layer stack from bottom to top: hillshade → CARTO-fallback-3d → custom-3d → h3-cells → data overlays
   // Each addLayer(x, 'h3-cells') inserts x immediately below h3-cells;
   // since they are added in order, the last one ends up closest to h3-cells.
 
@@ -1236,36 +1236,6 @@ map.on('load', () => {{
     layout: {{ visibility: 'none' }},
   }}, 'h3-cells');
 
-  // DEBUG cube — bright magenta pillar (250 m) near Seoul City Hall.
-  // Verify fill-extrusion renders at all; remove once confirmed.
-  map.addSource('debug-cube', {{
-    type: 'geojson',
-    data: {{
-      type: 'FeatureCollection',
-      features: [{{
-        type: 'Feature',
-        properties: {{ h: 250 }},
-        geometry: {{
-          type: 'Polygon',
-          coordinates: [[[126.9775, 37.5666], [126.9788, 37.5666],
-                          [126.9788, 37.5676], [126.9775, 37.5676],
-                          [126.9775, 37.5666]]]
-        }}
-      }}]
-    }}
-  }});
-  map.addLayer({{
-    id: 'debug-cube-layer',
-    type: 'fill-extrusion',
-    source: 'debug-cube',
-    paint: {{
-      'fill-extrusion-color': '#ff0077',
-      'fill-extrusion-height': ['get', 'h'],
-      'fill-extrusion-base': 0,
-      'fill-extrusion-opacity': 0.95,
-      'fill-extrusion-vertical-gradient': false,
-    }},
-  }}, 'h3-cells');
 
   // ── 5. Fetch custom GeoJSON with visible status ───────────────
   const _bldgStatus = document.getElementById('bldg-status');
