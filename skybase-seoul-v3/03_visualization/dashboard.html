@@ -79,6 +79,27 @@ body { font-family:'Noto Sans KR',sans-serif; background:#0f0f1a; color:#e0e0e0;
 @keyframes spin { to{transform:rotate(360deg)} }
 select:focus { outline:none; border-color:#4fc3f7; }
 select option { background:#0f1928; color:#e0e0e0; }
+
+/* Hub results section */
+.hub-section {
+  background:linear-gradient(145deg,#16213e,#1a1a2e);
+  border:1px solid #0f3460; border-radius:12px; padding:16px 20px; margin-bottom:16px;
+}
+.hub-grid {
+  display:grid; grid-template-columns:repeat(auto-fill,minmax(240px,1fr));
+  gap:10px; margin-top:4px;
+}
+.hub-item {
+  background:#0f1928; border:1px solid #1a3a5c; border-radius:8px; padding:12px 14px;
+  transition:all .35s ease; position:relative; overflow:hidden;
+}
+.hub-item.new-hub { border-color:#53d769; background:#0a1f0f; animation:hubPop .5s ease; }
+@keyframes hubPop { 0%{transform:scale(.95);opacity:0} 60%{transform:scale(1.03)} 100%{transform:scale(1);opacity:1} }
+.hub-item .hub-name { font-size:13px; font-weight:600; color:#e0e0e0; }
+.hub-item .hub-detail { font-size:11px; color:#8899aa; margin-top:3px; }
+.hub-rank { position:absolute; top:8px; right:10px; font-size:20px; opacity:.5; }
+.hub-coverage-bar { height:4px; border-radius:2px; margin-top:7px; background:#1a3a5c; overflow:hidden; }
+.hub-coverage-fill { height:100%; border-radius:2px; background:linear-gradient(90deg,#53d769,#4fc3f7); transition:width .6s ease; }
 </style>
 </head>
 <body>
@@ -106,7 +127,7 @@ select option { background:#0f1928; color:#e0e0e0; }
     </div>
     <div class="kpi-card blue">
       <div class="kpi-value" id="kpi-coverage">0%</div>
-      <div class="kpi-label">핫스팟 커버리지 (500m)</div>
+      <div class="kpi-label">핫스팟 커버리지 (3000m)</div>
     </div>
     <div class="kpi-card">
       <div class="kpi-value" id="kpi-avg-cs">0</div>
@@ -218,6 +239,11 @@ select option { background:#0f1928; color:#e0e0e0; }
         </div>
       </div>
     </div>
+  </div>
+
+  <div class="hub-section">
+    <div class="panel-title" style="margin-bottom:12px;">📍 최적 거점 <span id="hub-count-badge" style="background:#e9456033;color:#e94560;border-radius:10px;padding:1px 8px;font-size:11px;margin-left:6px;"></span></div>
+    <div id="hub-list" class="hub-grid"><div style="color:#556;font-size:12px;padding:8px;">레이어 조합 중…</div></div>
   </div>
 
 </div>
@@ -479,6 +505,34 @@ function buildHubLayer(selFacIndices, scores) {
   }
 }
 
+// ── Hub cards ─────────────────────────────────────────────────
+function renderHubList(selFacIndices, scores, hotspots) {
+  const container = document.getElementById('hub-list');
+  const badge     = document.getElementById('hub-count-badge');
+  if (!container) return;
+  badge.textContent = selFacIndices.length + '개 거점';
+
+  let cumCovered = new Set();
+  const cards = selFacIndices.map((fi, rank) => {
+    const fac     = FACS[fi];
+    const color   = PALETTE[rank % PALETTE.length];
+    const prevSize = cumCovered.size;
+    COV[fi].forEach(ci => { if (hotspots.has(ci)) cumCovered.add(ci); });
+    const newCov  = cumCovered.size - prevSize;
+    const cumPct  = hotspots.size > 0 ? (cumCovered.size / hotspots.size * 100) : 0;
+    return `<div class="hub-item">
+      <span class="hub-rank">${rank + 1}</span>
+      <div class="hub-name" style="color:${color}">#${rank+1} ${fac.name}</div>
+      <div class="hub-detail">🏢 ${fac.facility} · 수용 ${fac.capacity}대</div>
+      <div class="hub-detail">+${newCov} 핫스팟 · 누적 ${cumPct.toFixed(1)}%</div>
+      <div class="hub-coverage-bar"><div class="hub-coverage-fill" style="width:${cumPct.toFixed(1)}%"></div></div>
+    </div>`;
+  });
+  container.innerHTML = cards.length
+    ? cards.join('')
+    : '<div style="color:#556;font-size:12px;padding:8px;">거점 없음</div>';
+}
+
 // ═══════════════════════════════════════════════════════════════
 // Master update
 // ═══════════════════════════════════════════════════════════════
@@ -494,6 +548,7 @@ function updateDashboard() {
   const { hubs: selFacIndices, feasible, hotspots, uncovered } = result;
 
   buildHubLayer(selFacIndices, scores);
+  renderHubList(selFacIndices, scores, hotspots);
   renderH3Layer(scores);
 
   document.getElementById('kpi-feasible').textContent  = feasible.size.toLocaleString();
