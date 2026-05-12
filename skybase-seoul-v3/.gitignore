@@ -1,0 +1,16 @@
+# Raw data — excluded (too large / sensitive)
+00_data/
+
+# Oversized processed files
+processed/seoul_buildings.gpkg
+processed/merged_poi_data.json
+
+# Notebook checkpoints
+**/.ipynb_checkpoints/
+
+# Parquet binaries (regenerable from notebooks)
+processed/*.parquet
+
+# Python cache
+__pycache__/
+*.pyc
