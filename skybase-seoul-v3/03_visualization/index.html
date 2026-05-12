@@ -151,9 +151,9 @@ select option { background:#0f1928; color:#e0e0e0; }
     .control { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 16px 20px; }
     .control-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
     .control label { display: block; color: var(--blue); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px; }
-    select { width: 100%; padding: 9px 12px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; font-size: 13px; font-family: inherit; outline: none; }
-    select:focus { border-color: var(--blue); }
-    select option { background: var(--panel); color: var(--text); }
+    #tab-analysis select { width: 100%; padding: 9px 12px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; font-size: 13px; font-family: inherit; outline: none; }
+    #tab-analysis select:focus { border-color: var(--blue); }
+    #tab-analysis select option { background: var(--panel); color: var(--text); }
 
     /* KPI row labels */
     .kpi-row-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); margin: 20px 0 10px; display: flex; align-items: center; gap: 8px; }
@@ -205,11 +205,11 @@ select option { background:#0f1928; color:#e0e0e0; }
 
     /* Tables */
     .table-card { margin-top: 16px; overflow: hidden; }
-    table { width: 100%; border-collapse: collapse; font-size: 13px; }
-    th { text-align: left; color: var(--muted); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; padding: 10px 12px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--panel); white-space: nowrap; }
-    td { padding: 10px 12px; border-bottom: 1px solid var(--border-subtle); color: var(--text); }
-    tr:nth-child(even) td { background: rgba(255,255,255,0.02); }
-    tr:hover td { background: rgba(88,166,255,0.06); }
+    #tab-analysis table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    #tab-analysis th { text-align: left; color: var(--muted); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; padding: 10px 12px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--panel); white-space: nowrap; }
+    #tab-analysis td { padding: 10px 12px; border-bottom: 1px solid var(--border-subtle); color: var(--text); }
+    #tab-analysis tr:nth-child(even) td { background: rgba(255,255,255,0.02); }
+    #tab-analysis tr:hover td { background: rgba(88,166,255,0.06); }
     .badge { display: inline-block; padding: 2px 8px; background: rgba(248,81,73,0.15); color: var(--red); border: 1px solid rgba(248,81,73,0.3); border-radius: 4px; font-size: 11px; font-weight: 700; }
     .badge.ok { background: rgba(63,185,80,0.15); color: var(--green); border-color: rgba(63,185,80,0.3); }
     .detail-wrap { max-height: 420px; overflow: auto; border-radius: 6px; }
