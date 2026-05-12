@@ -577,11 +577,14 @@ function renderH3Layer(scores) {
 
   let colorExpr;
   if (colorMode === 'score') {
-    colorExpr = ['interpolate', ['linear'], ['get', 'score'],
-      0,   '#000000',
-      0.3, '#f85149',
-      0.6, '#f0883e',
-      1.0, '#3fb950'
+    colorExpr = ['case',
+      ['<=', ['get', 'score'], 0],    '#e94560',
+      ['<',  ['get', 'score'], 0.2],  '#ff5722',
+      ['<',  ['get', 'score'], 0.4],  '#ff9800',
+      ['<',  ['get', 'score'], 0.6],  '#ffeb3b',
+      ['<',  ['get', 'score'], 0.75], '#8bc34a',
+      ['<',  ['get', 'score'], 0.9],  '#4caf50',
+      '#00c853'
     ];
   } else {
     const field = colorMode === 'ddi' ? 'ddi' : 'pop';
@@ -748,7 +751,7 @@ map.on('load', () => {
   map.addSource('h3-source', {type:'geojson', data:{type:'FeatureCollection',features:[]}});
   map.addLayer({
     id:'h3-cells', type:'circle', source:'h3-source',
-    paint:{'circle-radius':5,'circle-color':'#000000','circle-opacity':0.75},
+    paint:{'circle-radius':5,'circle-color':'#4caf50','circle-opacity':0.75},
     layout:{visibility:'visible'}
   });
 
@@ -757,12 +760,16 @@ map.on('load', () => {
     new maplibregl.Popup()
       .setLngLat(e.lngLat)
       .setHTML(
-        `<div style="font-family:'Noto Sans KR';font-size:12px;">` +
-        `<b>${p.dong}</b> (${p.gu})<br>` +
-        `종합: <b>${parseFloat(p.score).toFixed(3)}</b><br>` +
-        `공역: ${p.sa} | 장애물: ${p.so}<br>` +
-        `소음: ${p.sn} | 지형: ${p.st} | 기상: ${p.sw}<br>` +
-        `긴급도: ${parseFloat(p.urgv).toFixed(3)} | 수요지수: ${parseFloat(p.ddi).toFixed(3)}</div>`
+        (() => {
+          const sc = parseFloat(p.score);
+          const scoreColor = sc <= 0.3 ? '#e53935' : sc <= 0.6 ? '#f0883e' : sc <= 0.8 ? '#66bb6a' : '#00c853';
+          return `<div style="font-family:'Noto Sans KR';font-size:12px;color:#111;line-height:1.7;">` +
+            `<b>${p.dong}</b> (${p.gu})<br>` +
+            `종합: <b style="color:${scoreColor}">${sc.toFixed(3)}</b><br>` +
+            `공역: ${p.sa} | 장애물: ${p.so}<br>` +
+            `소음: ${p.sn} | 지형: ${p.st} | 기상: ${p.sw}<br>` +
+            `긴급도: ${parseFloat(p.urgv).toFixed(3)} | 수요지수: ${parseFloat(p.ddi).toFixed(3)}</div>`;
+        })()
       ).addTo(map);
   });
   map.on('mouseenter','h3-cells', () => map.getCanvas().style.cursor='pointer');
