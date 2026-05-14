@@ -101,6 +101,8 @@ select option { background:#0f1928; color:#e0e0e0; }
 .hub-coverage-bar { height:4px; border-radius:2px; margin-top:7px; background:#1a3a5c; overflow:hidden; }
 .hub-coverage-fill { height:100%; border-radius:2px; background:linear-gradient(90deg,#53d769,#4fc3f7); transition:width .6s ease; }
 </style>
+<!-- Preloaded building data so file:// opens work without a local HTTP server -->
+<script src="./dashboard_data/seoul_buildings_3d.js"></script>
 </head>
 <body>
 
@@ -655,18 +657,14 @@ map.on('load', () => {
   },'h3-cells');
 
   const _bldgStatus = document.getElementById('bldg-status');
-  _bldgStatus.textContent = '🏢 3D 빌딩: 로딩 중…';
-  fetch('./dashboard_data/seoul_buildings_3d.geojson')
-    .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
-    .then(data => {
-      map.getSource('buildings-3d').setData(data);
-      map.setLayoutProperty('buildings-3d-layer','visibility','visible');
-      map.setLayoutProperty('buildings-carto-3d','visibility','none');
-      _bldgStatus.textContent = `🏢 3D 빌딩: ${data.features.length.toLocaleString()}개 로드됨`;
-    })
-    .catch(err => {
-      _bldgStatus.textContent = `⚠️ 빌딩 로드 실패 (CARTO 폴백): ${err.message}`;
-    });
+  if (window.BUILDINGS_DATA) {
+    map.getSource('buildings-3d').setData(window.BUILDINGS_DATA);
+    map.setLayoutProperty('buildings-3d-layer','visibility','visible');
+    map.setLayoutProperty('buildings-carto-3d','visibility','none');
+    _bldgStatus.textContent = `🏢 3D 빌딩: ${window.BUILDINGS_DATA.features.length.toLocaleString()}개 로드됨`;
+  } else {
+    _bldgStatus.textContent = '⚠️ 빌딩 데이터 없음 (CARTO 폴백)';
+  }
 
   map.addSource('service-circles',{type:'geojson',data:{type:'FeatureCollection',features:[]}});
   map.addLayer({id:'svc-fill',type:'fill',source:'service-circles',

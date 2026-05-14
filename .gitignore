@@ -1,0 +1,10 @@
+.claude/
+**/.claude/
+**/.superpowers/
+**/.ipynb_checkpoints/
+**/__pycache__/
+*.pyc
+
+# Local/raw data and generated archives
+**/00_data/
+**/dashboard_data.zip
